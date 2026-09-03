@@ -441,6 +441,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       fogCol: { value: new THREE.Color(HAZE) },
       fogDen: { value: fogDenNow() },
       hyps: { value: HYPS ? 1 : 0 },
+      moistT: { value: moistTex || new THREE.DataTexture(new Uint8Array(1), 1, 1, THREE.LuminanceFormat) },
+      moistB: { value: new THREE.Vector4(MOISTB.lon0, MOISTB.lat0, MOISTB.lonSpan, MOISTB.latSpan) },
+      farmOn: { value: moistTex ? 1 : 0 },
       // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
       clips: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -1, -1)) },
       nClip: { value: 0 }
@@ -471,6 +474,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       uniform vec3 fogCol;
       uniform float fogDen;
       uniform float hyps;
+      uniform sampler2D moistT;
+      uniform vec4 moistB;
+      uniform float farmOn;
       uniform float vexf;
       uniform vec4 clips[6];
       uniform int nClip;
@@ -582,6 +588,33 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         // 손으로 얹던 잔결과 돌빛은 걷어냈다. 실측 자료가 제 결을 가지고
         // 있으니 지어낸 무늬를 덧바를 까닭이 없다.
         vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet);
+
+        // ── 평야의 경작지 패치워크 (샤론 · 이스르엘 · 블레셋 평야, 나일 삼각주…) ──
+        //
+        // 앱과 같은 규칙이다 — 비탈이 완만하고(0.045 미만), 젖어 있고(0.30 넘고),
+        // 해발 1~450 m 인 땅에만. 밭 한 뙈기는 0.85 × 0.6 km, 그 칸마다 주사위를
+        // 굴려 어떤 뙈기는 그루터기빛으로, 어떤 뙈기는 짙은 초록으로 둔다.
+        //
+        // 다만 멀리서 보면 뙈기가 화소보다 작아져 얼룩이 된다 — 예전에 「이게
+        // 현실감이냐」 소리를 들은 그 얼룩이다. 그래서 30 km 밖에서는 스러진다.
+        if (farmOn > 0.5 && hyps < 0.5 && !wet && h > 1.0 && h < 450.0) {
+          float fam = 1.0 - smoothstep(30.0, 95.0, d);
+          if (fam > 0.01) {
+            float dzdx = (hr - hl) / (2.0 * mpp.x);
+            float dzdy = (hd - hu) / (2.0 * mpp.y);
+            if (sqrt(dzdx * dzdx + dzdy * dzdy) < 0.045) {
+              vec2 mu = vec2((lo - moistB.x) / moistB.z, (la - moistB.y) / moistB.w);
+              if (texture2D(moistT, clamp(mu, 0.0, 1.0)).r > 0.30) {
+                float fu = floor(lo * 94.6 / 0.85), fv = floor(la * 111.32 / 0.6);
+                float fh = fract(sin(fu * 127.1 + fv * 311.7) * 43758.5453);
+                if (fh > 0.62)
+                  col = mix(col, vec3(0.72, 0.66, 0.40), clamp((fh - 0.62) * 1.1, 0.0, 1.0) * fam);
+                else if (fh < 0.30)
+                  col = mix(col, vec3(0.30, 0.44, 0.20), clamp((0.30 - fh) * 0.9, 0.0, 1.0) * fam);
+              }
+            }
+          }
+        }
         float lam = clamp(dot(n, sun), 0.0, 1.0);
         float sky = 0.5 + 0.5 * n.y;
         vec3 lit = col * (vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)
@@ -1509,6 +1542,190 @@ function floorMeters(lat, lon) {
   if (lat > 29.62 && lat <= 31.05 && lon > 34.95 && lon < 35.80) return -30000;
   if (lat > 28.30 && lat < 30.60 && lon > 25.80 && lon < 29.60) return -30000;
   return 0;
+}
+
+// ── 젖은 정도 — 앱의 moistureAt 을 그대로 옮긴 것 ──────────
+//
+// 논밭이 어디에 있는가는 결국 「어디가 젖어 있는가」다. 앱은 지형을 구울 때마다
+// 이 값을 재지만, 여기서는 지도 전체를 **한 번만** 재어 작은 그림 한 장에 담고
+// 셰이더가 그것을 읽는다. (700×380, 한 칸이 6 km 쯤)
+
+function sstepJS(t) { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); }
+
+/** 지구대(요르단 골짜기)의 경도 — 위도별 조절점을 선으로 잇는다 */
+const RIFT_CTRL = [
+  [30.20, 35.150], [30.36, 35.145], [30.53, 35.195], [30.69, 35.285],
+  [30.86, 35.335], [30.97, 35.425], [31.25, 35.440], [31.60, 35.470],
+  [31.90, 35.530], [32.30, 35.550], [32.70, 35.570], [33.10, 35.610],
+  [33.60, 35.700]
+];
+function riftLonJS(la) {
+  const c = RIFT_CTRL;
+  if (la <= c[0][0]) return c[0][1];
+  if (la >= c[c.length - 1][0]) return c[c.length - 1][1];
+  for (let i = 0; i < c.length - 1; i++)
+    if (la >= c[i][0] && la <= c[i + 1][0]) {
+      const t = (la - c[i][0]) / (c[i + 1][0] - c[i][0]);
+      return c[i][1] + (c[i + 1][1] - c[i][1]) * t;
+    }
+  return c[c.length - 1][1];
+}
+/** 중앙 산지 분수령 — 비그늘의 경계 */
+function watershedLonJS(la) {
+  const c = coastLonJS(la), r = riftLonJS(la);
+  return c + (r - c) * 0.62;
+}
+
+/** 점에서 선분까지 (km) */
+function segKm(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const L = dx * dx + dy * dy;
+  let t = L > 0 ? ((px - ax) * dx + (py - ay) * dy) / L : 0;
+  t = Math.max(0, Math.min(1, t));
+  const qx = ax + dx * t, qy = ay + dy * t;
+  return Math.hypot(px - qx, py - qy);
+}
+
+/** 요르단 강가 — 사막 한가운데의 초록 띠(조르) */
+const JORDAN = [
+  [33.20, 35.62], [33.07, 35.61], [32.92, 35.60], [32.70, 35.57],
+  [32.50, 35.53], [32.30, 35.54], [32.10, 35.54], [31.90, 35.53], [31.78, 35.54]
+];
+function riparianJS(la, lo) {
+  if (la < 31.70 || la > 33.25 || lo < 35.35 || lo > 35.80) return 0;
+  const px = lo * KM_LON, py = la * KM_LAT;
+  let best = Infinity;
+  for (let i = 0; i < JORDAN.length - 1; i++) {
+    const a = JORDAN[i], b = JORDAN[i + 1];
+    const d = segKm(px, py, a[1] * KM_LON, a[0] * KM_LAT, b[1] * KM_LON, b[0] * KM_LAT);
+    if (d < best) best = d;
+  }
+  return 1 - sstepJS(best / 0.55);
+}
+
+/** 큰 강가는 사막 한가운데라도 초록이다 */
+function riverFactorJS(la, lo) {
+  let best = 0;
+  const px = lo * KM_LON, py = la * KM_LAT;
+  for (const r of BIGRIVERS) {
+    if (!r.pts || r.pts.length < 2) continue;
+    let d = Infinity;
+    for (let i = 0; i < r.pts.length - 1; i++) {
+      const a = r.pts[i], b = r.pts[i + 1];
+      if (Math.min(a[0], b[0]) - 1.2 > la || Math.max(a[0], b[0]) + 1.2 < la) continue;
+      if (Math.min(a[1], b[1]) - 1.2 > lo || Math.max(a[1], b[1]) + 1.2 < lo) continue;
+      const dd = segKm(px, py, a[1] * KM_LON, a[0] * KM_LAT, b[1] * KM_LON, b[0] * KM_LAT);
+      if (dd < d) d = dd;
+    }
+    if (isFinite(d)) {
+      const f = 1 - sstepJS(d / Math.max(r.widthKm || 6, 1));
+      if (f > best) best = f;
+    }
+  }
+  return best;
+}
+
+/** 나일 삼각주 — 카이로 꼭짓점에서 바다 쪽으로 벌어지는 초록 삼각형 */
+function deltaFactorJS(la, lo) {
+  if (la < 29.90 || la > 31.70 || lo < 29.80 || lo > 32.45) return 0;
+  const t = (la - 30.05) / (31.55 - 30.05);
+  if (t < -0.06) return 0;
+  const tc = Math.max(t, 0);
+  const half = 0.16 + 1.02 * tc;
+  const axis = 31.24 - 0.26 * tc;
+  const dx = Math.abs(lo - axis);
+  const edge = 1 - sstepJS((dx - half * 0.70) / Math.max(half * 0.30, 0.05));
+  const north = 1 - sstepJS((la - 31.44) / 0.20);
+  return Math.min(1, Math.max(0, edge)) * Math.min(1, Math.max(0, north)) * 0.62;
+}
+
+function levantMoist(la, lo, e) {
+  let m = 0.12 + 0.88 * sstepJS((la - 30.45) / (33.30 - 30.45));
+  m += 0.22 * sstepJS((e - 150) / 750);
+  const ws = watershedLonJS(la), rift = riftLonJS(la);
+  if (lo > ws && lo < rift) {
+    m -= 0.95 * sstepJS((lo - ws) / Math.max(rift - ws, 0.05));
+  } else if (lo >= rift) {
+    const east = sstepJS((lo - rift) / 0.45);
+    const plateau = 0.20 + 0.60 * sstepJS((la - 30.9) / (32.6 - 30.9));
+    const dry = m - 0.9;
+    m = dry + (plateau - dry) * east;
+  }
+  if (e < 0) m -= 0.35 * sstepJS(-e / 350);
+  if (lo < coastLonJS(la) + 0.03) m -= 0.15;
+  m = Math.max(m, riparianJS(la, lo) * 0.52);
+  return Math.min(1, Math.max(0, m));
+}
+
+function wideMoist(la, lo, e) {
+  let m;
+  if (lo <= 26.6 && la >= 34.2) {                    // 지중해 유럽
+    m = 0.52 + 0.22 * sstepJS((la - 35.0) / 7.0);
+    m -= 0.16 * (1 - sstepJS((la - 34.5) / 3.2));
+  } else if (la >= 36.2) {                           // 소아시아
+    const pontic = sstepJS((la - 40.2) / 1.1);
+    const aegean = 1 - sstepJS((lo - 28.6) / 2.2);
+    const plateau = sstepJS((lo - 30.5) / 1.6) * (1 - sstepJS((lo - 38.5) / 2.0))
+                  * (1 - sstepJS((la - 39.6) / 1.2));
+    m = 0.46 + 0.44 * pontic + 0.22 * aegean - 0.30 * plateau;
+    m -= 0.34 * sstepJS((39.2 - la) / 1.6) * sstepJS((lo - 37.0) / 3.0);
+  } else if (lo <= 33.2 && la <= 31.6) {             // 이집트·리비아 사막
+    m = 0.02 + 0.30 * sstepJS((la - 30.2) / 1.1);
+  } else if (la <= 30.6 && lo > 33.2) {              // 시나이 남부·북서 아라비아
+    m = 0.03 + 0.06 * sstepJS((e - 700) / 1200);
+  } else if (lo >= 46.6) {                           // 자그로스·카스피 남안
+    m = 0.12 + 0.44 * sstepJS((e - 700) / 1400) + 0.52 * sstepJS((la - 37.8) / 1.2);
+    m -= 0.10 * sstepJS((31.8 - la) / 1.5);
+  } else if (lo >= 38.5) {                           // 시리아 사막·메소포타미아
+    m = 0.06 + 0.30 * sstepJS((la - 33.0) / 3.6);
+  } else {                                           // 레반트 바깥 테두리
+    m = 0.10 + 0.42 * sstepJS((la - 31.0) / 4.0) - 0.25 * sstepJS((lo - 36.4) / 1.8);
+  }
+  m += 0.20 * sstepJS((e - 300) / 1400);
+  if (e < 0) m -= 0.20;
+  m = Math.max(m, riverFactorJS(la, lo) * 0.85);
+  m = Math.max(m, deltaFactorJS(la, lo));
+  return Math.min(1, Math.max(0, m));
+}
+
+/** 1 = 가나안 정밀 구역 한복판, 0 = 바깥 */
+function coreBlendJS(la, lo) {
+  const m = 0.5;
+  return Math.min(Math.min(sstepJS((lo - 33.90) / m), sstepJS((36.90 - lo) / m)),
+                  Math.min(sstepJS((la - 30.20) / m), sstepJS((33.60 - la) / m)));
+}
+
+function moistAt(la, lo, e) {
+  const t = coreBlendJS(la, lo);
+  if (t > 0.999) return levantMoist(la, lo, e);
+  const w = wideMoist(la, lo, e);
+  if (t < 0.001) return w;
+  return w + (levantMoist(la, lo, e) - w) * t;
+}
+
+// 지도 전체의 젖은 정도를 그림 한 장으로. 셰이더가 이것을 읽어 논밭을 그린다.
+let moistTex = null;
+const MOISTB = { lon0: 11.0, lat0: 21.0, lonSpan: 41.0006, latSpan: 22.0 };
+function buildMoist() {
+  if (moistTex) return;
+  const W = 700, H = 380;
+  const data = new Uint8Array(W * H);
+  for (let jj = 0; jj < H; jj++) {
+    const la = MOISTB.lat0 + (jj + 0.5) / H * MOISTB.latSpan;
+    for (let ii = 0; ii < W; ii++) {
+      const lo = MOISTB.lon0 + (ii + 0.5) / W * MOISTB.lonSpan;
+      const e = groundY(la, lo) / (0.001 * VEXAG);
+      data[jj * W + ii] = Math.round(255 * moistAt(la, lo, e));
+    }
+  }
+  moistTex = new THREE.DataTexture(data, W, H, THREE.LuminanceFormat);
+  moistTex.minFilter = THREE.LinearFilter;
+  moistTex.magFilter = THREE.LinearFilter;
+  moistTex.wrapS = THREE.ClampToEdgeWrapping;
+  moistTex.wrapT = THREE.ClampToEdgeWrapping;
+  moistTex.needsUpdate = true;
+  for (const m of terrainMats)
+    if (m.uniforms && m.uniforms.moistT) { m.uniforms.moistT.value = moistTex; m.uniforms.farmOn.value = 1; }
 }
 
 function inLake(lat, lon) {
@@ -2834,6 +3051,8 @@ function tick() {
         setTimeout(() => {
           buildGrid(region, texR.image, 420, 240);
           placeSites();                 // 가나안 밖 지명도 땅 위로 올라온다
+          // 논밭을 그리려면 어디가 젖었는지 먼저 알아야 한다
+          buildMoist();
           applyCam();
         }, 40);
       }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
