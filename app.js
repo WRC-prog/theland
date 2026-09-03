@@ -592,7 +592,6 @@ function bindControls() {
 
   addEventListener('pointerdown', e => {
     if (overUI(e.target)) return;
-    following = false;                   // 손을 대면 따라가기는 멈춘다
     moved = 0;
     try { el.setPointerCapture(e.pointerId); } catch (_) {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -625,11 +624,12 @@ function bindControls() {
       let da = a - twoA;
       while (da >  Math.PI) da -= 2.0 * Math.PI;
       while (da < -Math.PI) da += 2.0 * Math.PI;
-      if (Math.abs(da) < 0.5) cam.az += da;                 // 홱 튀는 값은 버린다
+      if (Math.abs(da) < 0.5) { cam.az += da; if (following) followAzOff += da; }
       // 세로로 함께 밀면 **기울이기**, 가로로 밀면 옮기기.
       // (한 손가락이 이미 아무 쪽으로나 옮겨 주므로 세로는 각도에 내준다)
       cam.el += (mid.y - twoMid.y) * 0.005;
-      panBy(mid.x - twoMid.x, 0);
+      if (following) { followAzOff -= (mid.x - twoMid.x) * 0.004; cam.az -= (mid.x - twoMid.x) * 0.004; }
+      else panBy(mid.x - twoMid.x, 0);
       twoD = d; twoA = a; twoMid = mid;
       applyCam();
       return;
@@ -637,7 +637,9 @@ function bindControls() {
     if (!last || !mode) return;
     const dx = e.clientX - last.x, dy = e.clientY - last.y;
     last = { x: e.clientX, y: e.clientY };
-    if (mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
+    // 따라가는 중에는 **둘러보기**가 된다 — 걸음은 멈추지 않는다
+    if (following)        { followAzOff -= dx * 0.005; cam.az -= dx * 0.005; cam.el += dy * 0.005; }
+    else if (mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
     else                  { panBy(dx, dy); }
     applyCam();
   });
@@ -1196,6 +1198,8 @@ document.head.appendChild(markCSS);
 // 길을 그려 놓고 보기만 하면 지도지, 여정이 아니다. 길 위를 실제로 걸어야
 // 골짜기와 고개가 눈에 들어온다. 카메라를 길 위에 얹고 앞을 보게 한다.
 let following = false, followKm = 0, followTotal = 0, lastT = 0, lastStop = -1;
+// 따라가는 중에 손으로 돌려본 만큼 — 나아가는 쪽에서 얼마나 비껴 보는가
+let followAzOff = 0;
 
 function routeLenTo(i) {
   let d = 0;
@@ -1225,7 +1229,7 @@ function toggleFollow() {
   if (following) {
     followTotal = routeLenTo(routePts.length - 1);
     if (followKm >= followTotal - 0.5) followKm = 0;
-    lastT = performance.now(); lastStop = -1;
+    lastT = performance.now(); lastStop = -1; followAzOff = 0;
     cam.dist = Math.min(cam.dist, 26);
     cam.el = Math.min(cam.el, 0.42);
   }
@@ -1246,7 +1250,7 @@ function stepFollow() {
   const dx = p.dlon * KM_LON, dz = -p.dlat * KM_LAT;
   if (Math.hypot(dx, dz) > 1e-6) {
     // 카메라는 뒤에 서서 나아가는 쪽을 본다
-    let want = Math.atan2(-dx, -dz);
+    let want = Math.atan2(-dx, -dz) + followAzOff;   // 손으로 비껴 본 만큼 더해서
     let da = want - cam.az;
     while (da >  Math.PI) da -= 2 * Math.PI;
     while (da < -Math.PI) da += 2 * Math.PI;
