@@ -10,6 +10,10 @@
     --line:rgba(255,255,255,.12);
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  /* 손가락·바퀴를 이 쪽에서 다 처리한다. 이게 없으면 브라우저가 먼저 채어다가
+     이 창을 담고 있는 쪽(구글 사이트)을 굴리거나 넓혀 버린다. */
+  html,body{touch-action:none; overscroll-behavior:none}
+  canvas,#labels,.lab{touch-action:none}
   html,body{margin:0;height:100%;overflow:hidden;background:#0b0d10;color:var(--ink);
     font:14px/1.5 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",
     "Malgun Gothic",system-ui,sans-serif}
@@ -176,7 +180,9 @@
     function open() {
       gate.remove();
       var s = document.createElement('script');
-      s.src = 'app.js';
+      // 깃허브는 파일을 십 분쯤 물고 있는다. 새로 올려도 옛 것이 돌아
+      // 「고쳤는데 그대로네」 하기 십상이라, app.js 만은 늘 새로 받는다.
+      s.src = 'app.js?v=' + Math.floor(Date.now() / 60000);
       document.body.appendChild(s);
     }
     try { if (sessionStorage.getItem('theland.ok') === KEY) return open(); } catch (e) {}
