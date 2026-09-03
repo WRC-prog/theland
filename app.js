@@ -65,14 +65,15 @@ function autoQual() {
   const t = c.effectiveType || '';
   if (t === 'slow-2g' || t === '2g' || t === '3g') return 'low';
   if (c.type === 'cellular') return 'low';
-  return 'mid';
+  // 처음은 늘 가볍게 연다. 올리고 싶으면 위 단추로 바로 올린다.
+  return 'low';
 }
-let QUAL = 'mid', qualAuto = false;
+let QUAL = 'low', qualAuto = false;
 try {
   const saved = localStorage.getItem('theland.qual');
   if (QUALS.indexOf(saved) >= 0) QUAL = saved;
   else { QUAL = autoQual(); qualAuto = true; }
-} catch (e) { QUAL = 'mid'; }
+} catch (e) { QUAL = 'low'; }
 
 /** 지형 판 하나의 그림을 갈아 끼운다 — 칸 수도 그림에게 다시 묻는다 */
 function swapTexture(mesh, tile, tex) {
@@ -329,6 +330,16 @@ const SKY = 0x9dc0dc, HAZE = 0xc6d6e0;      // 하늘빛과 지평선 안개
 // 물러설수록 화면 전체가 안개에 잠겨 **온 세상이 뿌옇게** 된다 — 지도를 보러
 // 왔는데 안개를 보게 된다. 그래서 멀리 물러설수록 옅게 푼다.
 const terrainMats = [];
+
+// 표고 모드 — 땅빛 대신 **높이 색**으로 칠한다. 어디가 산이고 어디가 골인지
+// 한눈에 들어온다. 켜고 끈 것은 기억해 둔다.
+let HYPS = false;
+try { HYPS = localStorage.getItem('theland.hyps') === '1'; } catch (e) {}
+function syncHyps() {
+  for (const m of terrainMats)
+    if (m.uniforms && m.uniforms.hyps) m.uniforms.hyps.value = HYPS ? 1 : 0;
+}
+
 function fogDenNow() {
   return 0.0009 * Math.max(0.12, Math.min(1, 260 / Math.max(40, cam.dist)));
 }
@@ -427,6 +438,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
       fogCol: { value: new THREE.Color(HAZE) },
       fogDen: { value: fogDenNow() },
+      hyps: { value: HYPS ? 1 : 0 },
       // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
       clips: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -1, -1)) },
       nClip: { value: 0 }
@@ -456,6 +468,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       uniform vec3 sun;
       uniform vec3 fogCol;
       uniform float fogDen;
+      uniform float hyps;
       uniform float vexf;
       uniform vec4 clips[6];
       uniform int nClip;
@@ -490,6 +503,20 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         if (la > 31.00 && la < 31.79 && lo > 35.32 && lo < 35.62 && h < -415.0) dry = false;
         if (la > 32.68 && la < 32.92 && lo > 35.47 && lo < 35.68 && h < -195.0) dry = false;
         return !dry;
+      }
+      // 표고 모드의 색 — 지도책의 등고 채색 그대로.
+      // 초록(저지) → 노랑 → 황토 → 갈색(산) → 흰빛(높은 봉우리).
+      vec3 hypsRamp(float h, bool wet){
+        if (wet)        return mix(vec3(0.09,0.22,0.44), vec3(0.46,0.70,0.88),
+                                   clamp(h/-1800.0+1.0,0.0,1.0));
+        if (h < 0.0)    return mix(vec3(0.60,0.72,0.52), vec3(0.72,0.83,0.58),
+                                   clamp(h/-430.0+1.0,0.0,1.0));
+        if (h < 200.0)  return mix(vec3(0.50,0.74,0.42), vec3(0.74,0.84,0.47), h/200.0);
+        if (h < 500.0)  return mix(vec3(0.74,0.84,0.47), vec3(0.94,0.89,0.54), (h-200.0)/300.0);
+        if (h < 1000.0) return mix(vec3(0.94,0.89,0.54), vec3(0.90,0.73,0.43), (h-500.0)/500.0);
+        if (h < 2000.0) return mix(vec3(0.90,0.73,0.43), vec3(0.74,0.53,0.38), (h-1000.0)/1000.0);
+        if (h < 3000.0) return mix(vec3(0.74,0.53,0.38), vec3(0.80,0.74,0.73), (h-2000.0)/1000.0);
+        return mix(vec3(0.80,0.74,0.73), vec3(1.0,1.0,1.0), clamp((h-3000.0)/1600.0,0.0,1.0));
       }
       vec3 ramp(float h, bool wet){
         // 표고 색 — 바다, 저지, 들, 구릉, 산, 눈
@@ -552,12 +579,14 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
 
         // 손으로 얹던 잔결과 돌빛은 걷어냈다. 실측 자료가 제 결을 가지고
         // 있으니 지어낸 무늬를 덧바를 까닭이 없다.
-        vec3 col = ramp(h, wet);
+        vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet);
         float lam = clamp(dot(n, sun), 0.0, 1.0);
         float sky = 0.5 + 0.5 * n.y;
-        col *= vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)
-             + vec3(0.42,0.48,0.56) * (0.30 * sky);
-        if (wet) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
+        vec3 lit = col * (vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)
+                        + vec3(0.42,0.48,0.56) * (0.30 * sky));
+        // 표고 모드에서는 그늘을 옅게 — 색이 곧 높이라, 그늘이 짙으면 색을 가린다.
+        col = hyps > 0.5 ? mix(col * 0.95, lit, 0.42) : lit;
+        if (wet && hyps < 0.5) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
 
         float f = 1.0 - exp(-fogDen * fogDen * d * d);
         gl_FragColor = vec4(mix(col, fogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -720,23 +749,39 @@ const DETAILS = [
   { ko: '아주 자세히', en: 'Full',     hintKo: '성문과 샘까지 전부',
     hintEn: 'Everything, down to gates and springs' }
 ];
-let DETAIL = 3;
+// 갈래마다 따로 정한다 — 성읍은 아주 자세히, 지형은 간단히 보고 싶을 수 있다.
+const DET = { city: 3, land: 3, water: 3, tribe: 3, nation: 3, inner: 3 };
 try {
-  const v = parseInt(localStorage.getItem('theland.detail'), 10);
-  if (v >= 0 && v <= 4) DETAIL = v;
+  const sv = JSON.parse(localStorage.getItem('theland.detail2') || 'null');
+  if (sv) {
+    for (const k in DET) if (sv[k] >= 0 && sv[k] <= 4) DET[k] = sv[k];
+  } else {
+    const v = parseInt(localStorage.getItem('theland.detail'), 10);
+    if (v >= 0 && v <= 4) for (const k in DET) DET[k] = v;
+  }
 } catch (e) {}
+function saveDetail() {
+  try { localStorage.setItem('theland.detail2', JSON.stringify(DET)); } catch (e) {}
+}
+// 등급 → 그 등급이 속한 갈래 (syncLayers 가 채운다)
+const rankLayer = {};
+function detailOf(rank) {
+  const k = rankLayer[rank];
+  return (k && DET[k] != null) ? DET[k] : 3;
+}
 
 function detailMul(rank) {
+  const D = detailOf(rank);
   switch (rank) {
-    case 0:  return DETAIL >= 2 ? 1.25 : 1.7;
-    case 1:  return DETAIL >= 2 ? 1.00 : 0;
-    case 3:  return DETAIL >= 2 ? 0.85 : 0;
-    case 4:  return DETAIL >= 2 ? 1.8 : (DETAIL === 1 ? 1.2 : 0);
-    case 7:  return DETAIL >= 2 ? 1.8 : (DETAIL === 1 ? 1.2 : 0);
-    case 8:  return DETAIL >= 1 ? 2.4 : 0;
+    case 0:  return D >= 2 ? 1.25 : 1.7;
+    case 1:  return D >= 2 ? 1.00 : 0;
+    case 3:  return D >= 2 ? 0.85 : 0;
+    case 4:  return D >= 2 ? 1.8 : (D === 1 ? 1.2 : 0);
+    case 7:  return D >= 2 ? 1.8 : (D === 1 ? 1.2 : 0);
+    case 8:  return D >= 1 ? 2.4 : 0;
     case 5: case 6: case 9: return 9.0;
-    case 10: return DETAIL >= 3 ? 0.55 : 0;
-    default: return DETAIL >= 4 ? 1.20 : (DETAIL === 3 ? 0.95 : 0);
+    case 10: return D >= 3 ? 0.55 : 0;
+    default: return D >= 4 ? 1.20 : (D === 3 ? 0.95 : 0);
   }
 }
 
@@ -765,7 +810,7 @@ try {
 } catch (e) {}
 const rankOn = {};
 function syncLayers() {
-  for (const l of LAYERS) for (const r of l.ranks) rankOn[r] = l.on;
+  for (const l of LAYERS) for (const r of l.ranks) { rankOn[r] = l.on; rankLayer[r] = l.k; }
   try {
     const o = {}; for (const l of LAYERS) o[l.k] = l.on;
     localStorage.setItem('theland.layers', JSON.stringify(o));
@@ -1059,6 +1104,14 @@ function addViewButtons() {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
+  const hypsBtn = mk(tag('▲', L.s('표고', 'Relief')),
+    L.s('땅 높이를 색으로 봅니다', 'Colour the land by height'), () => {
+    HYPS = !HYPS;
+    try { localStorage.setItem('theland.hyps', HYPS ? '1' : '0'); } catch (e) {}
+    hypsBtn.style.background = HYPS ? 'rgba(253,204,97,.25)' : '';
+    syncHyps();
+  });
+  hypsBtn.style.background = HYPS ? 'rgba(253,204,97,.25)' : '';
   // 화질도 돌려 가며 누르는 것이 아니라 **바로 고르는** 것이다 —
   // 하에서 상으로 한 번에 갈 수 있어야 한다.
   // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
@@ -2372,7 +2425,8 @@ function showCard(s) {
 const cardCSS = document.createElement('style');
 cardCSS.textContent =
   '#card{position:fixed;left:50%;bottom:14px;transform:translate(-50%,120%);z-index:25;' +
-  'display:flex;align-items:center;gap:6px;max-width:min(620px,94vw);width:max-content;' +
+  'display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;' +
+  'row-gap:7px;max-width:min(620px,94vw);width:max-content;' +
   'padding:9px 8px 9px 14px;border-radius:15px;background:var(--panel);' +
   'border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);' +
   'transition:transform .2s ease;opacity:0;pointer-events:none}' +
@@ -2406,14 +2460,10 @@ function openLayers() {
   // 갈래마다 지금 지도에 몇 곳이 걸려 있는지도 함께 적어 준다
   const cnt = {};
   for (const s of SITES) cnt[s.rank] = (cnt[s.rank] || 0) + 1;
-  // 얼마나 자세히 — 앱과 같은 다섯 단계
-  let html = '<div class="note"><em>' + escapeHTML(L.s('얼마나 자세히', 'How much detail')) +
-    '</em><div class="dpick">' + DETAILS.map((d, i) =>
-      '<button data-detail="' + i + '"' + (i === DETAIL ? ' class="sel"' : '') + '>' +
-      escapeHTML(L.cur === 'ko' ? d.ko : d.en) + '</button>').join('') + '</div>' +
-    '<span class="dhint">' +
-    escapeHTML(L.cur === 'ko' ? DETAILS[DETAIL].hintKo : DETAILS[DETAIL].hintEn) +
-    '</span></div>';
+  let html = '<div class="note" style="border:0;padding-bottom:2px">' +
+    escapeHTML(L.s('갈래를 눌러 켜고 끕니다. 켜면 그 아래에서 얼마나 자세히 볼지 고를 수 있습니다.',
+                   'Tap a layer to turn it on or off. When it is on, choose how much detail below it.')) +
+    '</div>';
 
   html += LAYERS.map(l => {
     const n = l.ranks.reduce((a, r2) => a + (cnt[r2] || 0), 0);
@@ -2422,6 +2472,12 @@ function openLayers() {
       '<span><b>' + escapeHTML(L.cur === 'ko' ? l.ko : l.en) +
       '<u>' + n + escapeHTML(L.s('곳', '')) + '</u></b>' +
       escapeHTML(L.cur === 'ko' ? l.hintKo : l.hintEn) + '</span></div>';
+    // 켜 둔 갈래마다 「얼마나 자세히」를 따로 고른다
+    if (l.on && l.k !== 'tribe' && l.k !== 'nation') {
+      row += '<div class="dpick" data-lay="' + l.k + '">' + DETAILS.map((d, i) =>
+        '<button data-detail="' + i + '"' + (i === DET[l.k] ? ' class="sel"' : '') + '>' +
+        escapeHTML(L.cur === 'ko' ? d.ko : d.en) + '</button>').join('') + '</div>';
+    }
     // 지파·민족은 켜 두었을 때 낱낱이 고를 수 있다. 하나도 고르지 않으면 다 본다.
     if ((l.k === 'tribe' || l.k === 'nation') && l.on) {
       const list = l.k === 'tribe' ? AREAS.tribes : AREAS.nations;
@@ -2460,7 +2516,7 @@ jgrpCSS.textContent =
   '#ph small{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
   'white-space:nowrap}' +
   // 얼마나 자세히 — 다섯 칸
-  '.dpick{display:flex;flex-wrap:wrap;gap:3px;margin:8px 0 6px}' +
+  '.dpick{display:flex;flex-wrap:wrap;gap:3px;margin:0 0 12px 26px}' +
   '.dpick button{flex:1 1 auto;border:1px solid rgba(255,255,255,.14);' +
   'background:none;color:#b9b1a3;cursor:pointer;font:600 11.5px/1 inherit;' +
   'padding:0 6px;height:30px;border-radius:9px;white-space:nowrap}' +
@@ -2567,8 +2623,8 @@ document.getElementById('pb').addEventListener('click', ev => {
   }
   const dp = ev.target.closest('[data-detail]');
   if (dp) {
-    DETAIL = +dp.dataset.detail;
-    try { localStorage.setItem('theland.detail', String(DETAIL)); } catch (e) {}
+    const lay = dp.parentNode && dp.parentNode.dataset.lay;
+    if (lay && DET[lay] != null) { DET[lay] = +dp.dataset.detail; saveDetail(); }
     updateLabels(); openLayers();
     return;
   }
