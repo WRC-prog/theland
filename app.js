@@ -1194,6 +1194,10 @@ function addViewButtons() {
     syncHyps();
   });
   hypsBtn.style.background = HYPS ? 'rgba(253,204,97,.25)' : '';
+
+  // 관리용 암호로 들어왔을 때만 붙는 단추
+  if (window.__ADMIN) mk(() => tag('◉', L.s('관리', 'Admin')),
+    () => L.s('몇 사람이 들어왔는지', 'How many have come in'), openAdmin);
   // 화질도 돌려 가며 누르는 것이 아니라 **바로 고르는** 것이다 —
   // 하에서 상으로 한 번에 갈 수 있어야 한다.
   // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
@@ -2816,6 +2820,58 @@ function openLayers() {
   panel.classList.add('open');
 }
 
+// ── 관리 판 — 몇 사람이 들어왔는가 ─────────────────────────
+//
+// 깃허브 페이지는 파일을 내주기만 할 뿐 아무것도 기억하지 못한다.
+// 그래서 셈은 바깥의 조그만 셈 지기(abacus)에 맡겨 두고, 여기서는 읽기만 한다.
+// 관리용 암호로 들어왔을 때만 툴바에 단추가 붙는다.
+function ymdJS(d) {
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+                         + '-' + ('0' + d.getDate()).slice(-2);
+}
+async function readCount(k) {
+  try {
+    const r = await fetch((window.__CNT || '') + 'get/' + (window.__NS || '') + '/' + k,
+                          { cache: 'no-store' });
+    if (r.status === 404) return 0;          // 아직 한 번도 안 세어진 칸
+    if (!r.ok) return null;
+    const o = await r.json();
+    return o.value || 0;
+  } catch (e) { return null; }
+}
+
+async function openAdmin() {
+  panelIsRoutes = false;
+  document.getElementById('pTitle').textContent = L.s('들어온 사람', 'Visitors');
+  document.getElementById('pSub').textContent = L.s('세어 둔 값', 'What has been counted');
+  const b = document.getElementById('pb');
+  b.innerHTML = '<div class="note">' + escapeHTML(L.s('세는 중…', 'Counting…')) + '</div>';
+  panel.classList.add('open');
+
+  const days = [];
+  for (let i = 0; i < 7; i++) { const d = new Date(); d.setDate(d.getDate() - i); days.push(ymdJS(d)); }
+  const vals = await Promise.all([readCount('people-total'), readCount('visits-total')]
+                                 .concat(days.map(d => readCount('day-' + d))));
+  const n = v => v == null ? '—' : String(v);
+  const row = (k, v) => '<div class="arow"><span>' + escapeHTML(k) + '</span><b>' + n(v) + '</b></div>';
+
+  let h = '<div class="note"><em>' + escapeHTML(L.s('모두', 'All time')) + '</em>' +
+    row(L.s('기기 수 — 대략 사람 수', 'Devices — roughly people'), vals[0]) +
+    row(L.s('들어온 횟수', 'Entries'), vals[1]) + '</div>';
+  h += '<div class="note"><em>' + escapeHTML(L.s('요 이레', 'Last seven days')) + '</em>' +
+    days.map((d, i) => row(d + (i === 0 ? L.s('  (오늘)', '  (today)') : ''), vals[i + 2])).join('') +
+    '</div>';
+  h += '<div class="note" style="color:#8d867a;border:0">' + escapeHTML(L.s(
+    '기기마다 한 번씩 셉니다. 같은 사람이 폰과 컴퓨터로 들어오면 둘로 세고, ' +
+    '브라우저 기록을 지우면 다시 셉니다. 관리 암호로 들어온 것은 세지 않습니다. ' +
+    '누가 들어왔는지는 알 수 없습니다 — 숫자만 셉니다.',
+    'Counted once per device. One person on two devices counts twice; clearing the browser ' +
+    'counts again. Admin entries are not counted. Who came in is not recorded — only how many.'))
+    + '</div>';
+  b.innerHTML = h;
+  b.scrollTop = 0;
+}
+
 let panelIsRoutes = false;
 // 어느 주제를 펼쳐 두었는지 기억한다 — 판을 다시 그려도 접히지 않게.
 const openGroups = new Set();
@@ -2835,6 +2891,10 @@ jgrpCSS.textContent =
   'padding:0 6px;height:30px;border-radius:9px;white-space:nowrap}' +
   '.dpick button.sel{background:rgba(253,204,97,.92);color:#231702;border-color:transparent}' +
   '.dhint{display:block;color:#8d867a;font-size:11.5px}' +
+  // 관리 판의 숫자 줄
+  '.arow{display:flex;align-items:baseline;gap:10px;padding:6px 0}' +
+  '.arow span{flex:1;color:#cfc8ba;font-size:13px}' +
+  '.arow b{font:700 16px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold)}' +
   // 지파·민족 낱낱이
   '.chips{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 12px 26px}' +
   '.chips .chip{display:inline-flex;align-items:center;gap:5px;cursor:pointer;' +
