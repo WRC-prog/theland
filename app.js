@@ -1215,7 +1215,16 @@ function addViewButtons() {
     '#tools .btn{display:inline-flex;align-items:center;gap:5px;padding:9px 12px;white-space:nowrap}' +
     '#tools .btn i{font-style:normal;font-size:13px;opacity:.85}' +
     '#tools .btn u{text-decoration:none;font-size:12.5px;font-weight:600}' +
-    '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}';
+    '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}' +
+    // 폰에서는 찾기 칸이 단추들에 밀려 손톱만 해진다. 아래로 한 줄 내려
+    // 화면 너비를 다 쓰게 한다. 글씨도 16px — 그보다 작으면 사파리가
+    // 칸을 누를 때마다 화면을 확 당긴다.
+    '@media (max-width:660px){' +
+      '#top{flex-wrap:wrap;gap:6px}' +
+      '#search{flex:1 1 100%;max-width:none;order:2}' +
+      '#q{padding:12px 14px;font-size:16px}' +
+      '#tools,#qualPick,#live,#hud{order:1}' +
+    '}';
   document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
@@ -1237,9 +1246,8 @@ function addViewButtons() {
   });
   hypsBtn.style.background = HYPS ? 'rgba(253,204,97,.25)' : '';
 
-  // 관리용 암호로 들어왔을 때만 붙는 단추
-  if (window.__ADMIN) mk(() => tag('◉', L.s('관리', 'Admin')),
-    () => L.s('몇 사람이 들어왔는지', 'How many have come in'), openAdmin);
+  // 관리용 암호로 들어왔을 때만 — 켜져 있는 등
+  if (window.__ADMIN) makeLive();
   // 화질도 돌려 가며 누르는 것이 아니라 **바로 고르는** 것이다 —
   // 하에서 상으로 한 번에 갈 수 있어야 한다.
   // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
@@ -1318,10 +1326,7 @@ function openPlace(s) {
   body.scrollTop = 0;
   panel.classList.add('open');
 }
-onTap(document.getElementById('closeBtn'), () => {
-  panel.classList.remove('open');
-  panelIsAdmin = false; clearInterval(adminTimer);
-});
+onTap(document.getElementById('closeBtn'), () => panel.classList.remove('open'));
 
 // ── 문장에서 곳 찾아내기 ──────────────────────────────────
 //
@@ -2916,6 +2921,14 @@ cardCSS.textContent =
   '.cslot{border:0;font:600 12px/1 inherit;color:rgba(255,255,255,.9);cursor:pointer;' +
   'padding:0 12px;height:30px;border-radius:15px;background:rgba(255,255,255,.14)}' +
   '.cslot.on{background:#f5e6c2;color:rgba(0,0,0,.85)}' +
+  // 좁은 화면에서는 단추 하나만 아래로 흘러내려 보기 흉했다.
+  // 이름은 윗줄에, 단추는 모두 아랫줄에 나란히 세운다.
+  '@media (max-width:560px){' +
+    '#card{width:min(96vw,430px);max-width:96vw;padding:10px 12px;justify-content:center}' +
+    '#cName{flex:1 1 100%;max-width:none;text-align:center;white-space:normal}' +
+    '.cgap{display:none}' +
+    '#card>button{flex:0 0 auto}' +
+  '}' +
   '#cX,#cMinus{border:0;background:none;color:rgba(255,255,255,.6);font:14px/1 inherit;' +
   'cursor:pointer;width:26px;height:26px;border-radius:13px}' +
   '#cX:hover,#cMinus:hover{background:rgba(255,255,255,.1)}' +
@@ -2996,45 +3009,44 @@ async function readCount(k) {
   } catch (e) { return null; }
 }
 
-let adminTimer = 0;
-async function drawAdmin() {
-  const b = document.getElementById('pb');
-  if (!panel.classList.contains('open') || !panelIsAdmin) return;
-  const mk = window.__MKEY || (d => 'm-' + d.getFullYear());
-  const mins = [];
-  for (let i = 1; i <= 10; i++) mins.push(mk(new Date(Date.now() - i * 60000)));
-  const vals = await Promise.all(mins.map(readCount));
-  if (!panel.classList.contains('open') || !panelIsAdmin) return;
-  const now = vals[0];
-  let h = '<div class="note" style="text-align:center;border:0;padding-top:18px">' +
-    '<div class="abig">' + (now == null ? '—' : now) + '</div>' +
-    '<div class="asub">' + escapeHTML(L.s('지금 보고 있는 사람', 'Looking right now')) + '</div></div>';
-  h += '<div class="note"><em>' + escapeHTML(L.s('요 십 분', 'Last ten minutes')) + '</em>' +
-    '<div class="amins">' + vals.slice().reverse().map(v =>
-      '<i>' + (v == null ? '·' : v) + '</i>').join('') + '</div></div>';
-  h += '<div class="note" style="color:#8d867a;border:0">' + escapeHTML(L.s(
-    '열어 둔 창이 한 분에 한 번씩 손을 듭니다. 그래서 이 수는 **지난 한 분** 동안 ' +
-    '열려 있던 창의 수입니다 — 창을 닫으면 다음 분부터 빠집니다. 한 사람이 두 곳에서 ' +
-    '열어 두면 둘로 셉니다. 관리 암호로 들어온 것은 세지 않습니다. 누가 왔는지는 ' +
-    '알 수 없습니다 — 숫자만 셉니다.',
-    'Each open window raises its hand once a minute, so this is how many windows were open ' +
-    'during the last full minute — closing one drops it from the next minute. One person with ' +
-    'two windows counts twice. Admin entries are not counted. Who is looking is not recorded.'))
-    + '</div>';
-  b.innerHTML = h;
+// 지금 몇 창이 열려 있는가 — 툴바에 켜 두는 등 하나.
+// 판을 열어 표를 보는 것이 아니라, 사람 모양 옆에 수가 적히고 주황 불이 깜빡인다.
+let liveEl = null, liveTimer = 0;
+async function tickLive() {
+  if (!liveEl) return;
+  const mk = window.__MKEY;
+  if (!mk) return;
+  const v = await readCount(mk(new Date(Date.now() - 60000)));
+  liveEl.querySelector('b').textContent = (v == null ? '—' : v);
 }
-
-let panelIsAdmin = false;
-async function openAdmin() {
-  panelIsRoutes = false; panelIsAdmin = true;
-  document.getElementById('pTitle').textContent = L.s('지금 보는 사람', 'Right now');
-  document.getElementById('pSub').textContent = L.s('열려 있는 창의 수', 'Windows open');
-  document.getElementById('pb').innerHTML =
-    '<div class="note" style="border:0">' + escapeHTML(L.s('세는 중…', 'Counting…')) + '</div>';
-  panel.classList.add('open');
-  await drawAdmin();
-  clearInterval(adminTimer);
-  adminTimer = setInterval(drawAdmin, 20000);   // 스무 초마다 새로
+function makeLive() {
+  liveEl = document.createElement('div');
+  liveEl.id = 'live';
+  liveEl.className = 'card';
+  liveEl.title = L.s('지금 열려 있는 창', 'Windows open right now');
+  liveEl.innerHTML =
+    '<i class="dot"></i>' +
+    '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+    '<circle cx="8" cy="4.6" r="3"/><path d="M1.6 15c0-3.5 2.9-5.6 6.4-5.6s6.4 2.1 6.4 5.6z"/>' +
+    '</svg><b>·</b>';
+  const tools = document.getElementById('tools');
+  tools.parentNode.insertBefore(liveEl, tools);
+  const st = document.createElement('style');
+  st.textContent =
+    '#live{display:inline-flex;align-items:center;gap:7px;padding:0 13px;height:38px;' +
+    'border-radius:12px;color:var(--ink);white-space:nowrap}' +
+    '#live svg{width:13px;height:13px;opacity:.85}' +
+    '#live b{font:700 15px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold);' +
+    'min-width:1ch;text-align:center}' +
+    '#live .dot{width:9px;height:9px;border-radius:5px;background:#ff8a2b;' +
+    'box-shadow:0 0 9px rgba(255,138,43,.95);animation:onair 1.5s ease-in-out infinite}' +
+    '@keyframes onair{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.68)}}' +
+    '@media (prefers-reduced-motion:reduce){#live .dot{animation:none}}' +
+    '@media (max-width:700px){#live{padding:0 10px;gap:6px}}';
+  document.head.appendChild(st);
+  tickLive();
+  clearInterval(liveTimer);
+  liveTimer = setInterval(tickLive, 20000);
 }
 
 let panelIsRoutes = false;
@@ -3060,11 +3072,7 @@ jgrpCSS.textContent =
   '.arow{display:flex;align-items:baseline;gap:10px;padding:6px 0}' +
   '.arow span{flex:1;color:#cfc8ba;font-size:13px}' +
   '.arow b{font:700 16px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold)}' +
-  '.abig{font:800 64px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold)}' +
-  '.asub{margin-top:6px;color:#cfc8ba;font-size:13px}' +
-  '.amins{display:flex;gap:4px;margin-top:8px}' +
-  '.amins i{flex:1;text-align:center;font:600 12px/28px ui-monospace,Menlo,monospace;' +
-  'color:#cfc8ba;background:rgba(255,255,255,.06);border-radius:7px}' +
+
   // 찾은 목록의 「표시」 단추
   '.hit{position:relative;padding-right:74px}' +
   '.hmark{position:absolute;right:10px;top:50%;transform:translateY(-50%);' +
