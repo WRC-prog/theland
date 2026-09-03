@@ -87,6 +87,7 @@ async function loadAll() {
   ]);
   I18N = i18n; TERRAIN = terrain;
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
+  I18N = i18n;
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
   SITES = unpack(sites);
@@ -101,6 +102,16 @@ async function loadAll() {
     byPlace.get(e.place).push(e);
   }
   for (const n of unpack(notes)) NOTES.set(n.place, n);
+  // 물길에도 이름을 붙인다 — 앱처럼 골짜기와 급류가 지도에 보이게.
+  // 가운데 점을 자리로 삼아 지명 목록에 끼워 넣는다(등급 7 = 물길).
+  for (const wv of WAYS) {
+    if (!wv.pts || wv.pts.length < 2 || siteByName.has(wv.ko)) continue;
+    const mid = wv.pts[wv.pts.length >> 1];
+    const s = { ko: wv.ko, en: (I18N.place && I18N.place[wv.ko]) || wv.ko,
+                lat: mid[0], lon: mid[1], region: '물길', rank: 7 };
+    s.i = SITES.length; s.f = fold(s.ko) + '' + fold(s.en);
+    SITES.push(s); siteByName.set(s.ko, s);
+  }
   say('자료 ' + EVENTS.length + '건 · 지명 ' + SITES.length + '곳', 20);
 }
 
@@ -186,6 +197,22 @@ function placeSites() {
 
 // ── 그림 판 ───────────────────────────────────────────────
 let renderer, scene, camera, labelRoot;
+const SKY = 0x9dc0dc, HAZE = 0xc6d6e0;      // 하늘빛과 지평선 안개
+
+/** 위는 파랗고 아래로 갈수록 옅어지는 하늘 한 장 */
+function skyTexture() {
+  const c = document.createElement('canvas');
+  c.width = 2; c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#6f9fca');
+  grad.addColorStop(0.62, '#9dc0dc');
+  grad.addColorStop(1, '#cfdde6');
+  g.fillStyle = grad; g.fillRect(0, 0, 2, 256);
+  const t = new THREE.CanvasTexture(c);
+  t.minFilter = THREE.LinearFilter;
+  return t;
+}
 const cam = { tx: 0, tz: 0, dist: 260, az: 0.35, el: 0.62 };   // 도는 카메라
 
 function initGL() {
@@ -193,11 +220,13 @@ function initGL() {
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setClearColor(0x0b0d10);
+  // 캄캄한 밤하늘 대신 **낮**. 먼 데는 옅은 안개로 스러지게 한다.
+  renderer.setClearColor(SKY);
   document.body.insertBefore(renderer.domElement, document.getElementById('labels'));
 
   scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x0b0d10, 0.0009);
+  scene.fog = new THREE.FogExp2(HAZE, 0.0009);
+  scene.background = skyTexture();
   camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 12000);
   labelRoot = document.getElementById('labels');
 
@@ -239,7 +268,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         (tile.latMax - tile.latMin) * KM_LAT * 1000 / Math.max(ih - 1, 1)) },
       geo: { value: new THREE.Vector4(ORIGIN.lon, ORIGIN.lat, KM_LON, KM_LAT) },
       sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
-      fogCol: { value: new THREE.Color(0x0b0d10) },
+      fogCol: { value: new THREE.Color(HAZE) },
       fogDen: { value: 0.0009 },
       // 비워 둘 네모 (x0,z0,x1,z1). 뒤집힌 값이면 아무 데도 비우지 않는다.
       clip: { value: clip || new THREE.Vector4(0, 0, -1, -1) }
@@ -356,37 +385,13 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         bool wet = wetAt(h, la, lo);
         float d = length(vWorld - cameraPosition);
 
-        // 잔결 — 자료가 못 담는 결을 손으로 얹는다.
-        //
-        // 처음에는 마디를 400 m 로 잡았다가 **얼룩무늬**가 되어 버렸다.
-        // 잔결은 하나하나 눈에 보이면 안 된다. 140 m 와 38 m 로 잘게 잡고
-        // 세기도 크게 낮춘다 — 땅의 살결이지 무늬가 아니다.
-        float fine = clamp((26.0 - d) / 22.0, 0.0, 1.0);
-        if (!wet && fine > 0.01) {
-          vec2 q = vWorld.xz * 7.0;
-          float gx = vnoise(q + vec2(0.5, 0.0)) - vnoise(q - vec2(0.5, 0.0));
-          float gz = vnoise(q + vec2(0.0, 0.5)) - vnoise(q - vec2(0.0, 0.5));
-          vec2 q2 = vWorld.xz * 26.0;
-          gx += 0.5 * (vnoise(q2 + vec2(0.5, 0.0)) - vnoise(q2 - vec2(0.5, 0.0)));
-          gz += 0.5 * (vnoise(q2 + vec2(0.0, 0.5)) - vnoise(q2 - vec2(0.0, 0.5)));
-          n = normalize(n + vec3(gx, 0.0, gz) * 0.26 * fine);
-        }
-
+        // 손으로 얹던 잔결과 돌빛은 걷어냈다. 실측 자료가 제 결을 가지고
+        // 있으니 지어낸 무늬를 덧바를 까닭이 없다.
         vec3 col = ramp(h, wet);
-        if (!wet) {
-          // 비탈이 설수록 흙이 씻겨 나가고 돌이 드러난다
-          float slope = clamp(1.0 - n.y, 0.0, 1.0);
-          float rock  = smoothstep(0.34, 0.82, slope);
-          vec3 rockCol = mix(vec3(0.43,0.39,0.34), vec3(0.52,0.48,0.44),
-                             vnoise(vWorld.xz * 9.0));
-          col = mix(col, rockCol, rock * 0.45);
-        }
-
-        // 해는 따뜻하게, 하늘빛은 차게 — 한 가지 빛으로만 칠하면 판판해 보인다
         float lam = clamp(dot(n, sun), 0.0, 1.0);
         float sky = 0.5 + 0.5 * n.y;
-        col *= vec3(1.03,0.97,0.87) * (0.14 + 0.92 * lam)
-             + vec3(0.30,0.37,0.47) * (0.34 * sky);
+        col *= vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)
+             + vec3(0.42,0.48,0.56) * (0.30 * sky);
         if (wet) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
 
         float f = 1.0 - exp(-fogDen * fogDen * d * d);
@@ -418,6 +423,9 @@ function loadTexture(url) {
 // 같은 그림에서 조각만 다시 뜨는 것이라 값이 싸다.
 //
 // 겹치면 서로 파고들므로, 밑에 깔린 큰 판에게는 그 네모를 비우라고 이른다.
+// 켜 두면 한 손가락으로 끌 때 자리를 옮기지 않고 **고개만 돌린다** —
+// 높이는 그대로 두고 사방을 둘러볼 수 있다.
+let lookMode = false, lookBtn = null;
 let baseCanaan = null, canaanTex = null, canaanTile = null;
 let detailMesh = null, detailWin = null;
 
@@ -642,7 +650,7 @@ function bindControls() {
     last = { x: e.clientX, y: e.clientY };
     // 따라가는 중에는 **둘러보기**가 된다 — 걸음은 멈추지 않는다
     if (following)        { followAzOff -= dx * 0.005; cam.az -= dx * 0.005; cam.el += dy * 0.005; }
-    else if (mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
+    else if (lookMode || mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
     else                  { panBy(dx, dy); }
     applyCam();
   });
@@ -718,6 +726,10 @@ function addViewButtons() {
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로)
   mk('⌄', L.s('눕히기', 'Lower the view'),  () => { cam.el -= 0.16; applyCam(); });
   mk('⇢', L.s('길', 'Journeys'), openRoutes);
+  lookBtn = mk('◎', L.s('둘러보기', 'Look around'), () => {
+    lookMode = !lookMode;
+    lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
+  });
   mk('⌃', L.s('세우기', 'Raise the view'),  () => { cam.el += 0.16; applyCam(); });
   mk('−', L.s('물러서기', 'Zoom out'),      () => zoomAt(1.35));
   mk('＋', L.s('다가가기', 'Zoom in'),       () => zoomAt(1 / 1.35));
@@ -1435,9 +1447,12 @@ function addRivers() {
     // 실제 강폭은 수십 미터라 그대로 그리면 안 보인다. 눈에 잡히는 굵기로
     // 올리되, 큰 강과 마른 급류 골짜기는 구별되게 둔다.
     const wide = Math.max(0.35, Math.min(1.6, (r.widthM || 30) / 90));
+    // 마른 골짜기도 물길로 그린다 — 우기에는 실제로 물이 흐르던 곳이다.
+    // 다만 큰 강보다는 옅게 두어 구별이 되게 한다.
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
-    drapeRuns(riverMesh, pts, wide, dry ? 0x7f8a72 : 0x2f6f95, 0.010,
-              { opacity: dry ? 0.4 : 0.72, order: 3 });
+    drapeRuns(riverMesh, pts, Math.max(wide, dry ? 0.45 : 0.55),
+              dry ? 0x4d87a6 : 0x2f6f95, 0.010,
+              { opacity: dry ? 0.55 : 0.8, order: 3 });
   }
   scene.add(riverMesh);
 }
@@ -1585,6 +1600,21 @@ document.getElementById('pb').addEventListener('click', ev => {
                         clearRoute(); openRoutes(); }
   if (act === 'roads'){ toggleRoads(); openRoutes(); }
 });
+
+const labSizeCSS = document.createElement('style');
+labSizeCSS.textContent =
+  // 상 — 큰 도시
+  '.lab.r0{font-size:19px;font-weight:800;letter-spacing:.01em}' +
+  '.lab.r1{font-size:15.5px;font-weight:700}' +
+  // 중 — 성읍
+  '.lab.r2{font-size:13.5px;font-weight:600}' +
+  '.lab.r3{font-size:12.5px;font-weight:500}' +
+  // 하 — 지형과 지역
+  '.lab.r4,.lab.r5,.lab.r6,.lab.r7,.lab.r8,.lab.r9{font-size:12px}' +
+  '.lab.r7{color:#a9cfe0}' +
+  '@media (max-width:560px){.lab.r0{font-size:16px}.lab.r1{font-size:13.5px}' +
+  '.lab.r2{font-size:12px}.lab.r3{font-size:11px}}';
+document.head.appendChild(labSizeCSS);
 
 const routeCSS = document.createElement('style');
 routeCSS.textContent =
