@@ -356,26 +356,30 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         bool wet = wetAt(h, la, lo);
         float d = length(vWorld - cameraPosition);
 
-        // 다가갔을 때만 잔결을 얹는다 — 멀리서는 자글거리기만 한다.
-        float fine = clamp(1.0 - d / 70.0, 0.0, 1.0);
+        // 잔결 — 자료가 못 담는 결을 손으로 얹는다.
+        //
+        // 처음에는 마디를 400 m 로 잡았다가 **얼룩무늬**가 되어 버렸다.
+        // 잔결은 하나하나 눈에 보이면 안 된다. 140 m 와 38 m 로 잘게 잡고
+        // 세기도 크게 낮춘다 — 땅의 살결이지 무늬가 아니다.
+        float fine = clamp((26.0 - d) / 22.0, 0.0, 1.0);
         if (!wet && fine > 0.01) {
-          vec2 q = vWorld.xz * 2.6;
-          float gx = vnoise(q + vec2(0.8, 0.0)) - vnoise(q - vec2(0.8, 0.0));
-          float gz = vnoise(q + vec2(0.0, 0.8)) - vnoise(q - vec2(0.0, 0.8));
-          vec2 q2 = q * 4.3;
-          gx += 0.45 * (vnoise(q2 + vec2(0.6, 0.0)) - vnoise(q2 - vec2(0.6, 0.0)));
-          gz += 0.45 * (vnoise(q2 + vec2(0.0, 0.6)) - vnoise(q2 - vec2(0.0, 0.6)));
-          n = normalize(n + vec3(gx, 0.0, gz) * 0.85 * fine);
+          vec2 q = vWorld.xz * 7.0;
+          float gx = vnoise(q + vec2(0.5, 0.0)) - vnoise(q - vec2(0.5, 0.0));
+          float gz = vnoise(q + vec2(0.0, 0.5)) - vnoise(q - vec2(0.0, 0.5));
+          vec2 q2 = vWorld.xz * 26.0;
+          gx += 0.5 * (vnoise(q2 + vec2(0.5, 0.0)) - vnoise(q2 - vec2(0.5, 0.0)));
+          gz += 0.5 * (vnoise(q2 + vec2(0.0, 0.5)) - vnoise(q2 - vec2(0.0, 0.5)));
+          n = normalize(n + vec3(gx, 0.0, gz) * 0.26 * fine);
         }
 
         vec3 col = ramp(h, wet);
         if (!wet) {
           // 비탈이 설수록 흙이 씻겨 나가고 돌이 드러난다
           float slope = clamp(1.0 - n.y, 0.0, 1.0);
-          float rock  = smoothstep(0.30, 0.80, slope);
-          vec3 rockCol = mix(vec3(0.40,0.36,0.32), vec3(0.56,0.51,0.46),
-                             vnoise(vWorld.xz * 0.55));
-          col = mix(col, rockCol, rock * 0.62);
+          float rock  = smoothstep(0.34, 0.82, slope);
+          vec3 rockCol = mix(vec3(0.43,0.39,0.34), vec3(0.52,0.48,0.44),
+                             vnoise(vWorld.xz * 9.0));
+          col = mix(col, rockCol, rock * 0.45);
         }
 
         // 해는 따뜻하게, 하늘빛은 차게 — 한 가지 빛으로만 칠하면 판판해 보인다
@@ -519,6 +523,7 @@ function updateLabels() {
     el.style.top = c.sy + 'px';
   }
   shown = out;
+  updateStopMarks();
 }
 
 function escapeHTML(s) {
@@ -528,7 +533,9 @@ function escapeHTML(s) {
 // ── 카메라 몰기 ───────────────────────────────────────────
 function applyCam() {
   cam.el = Math.max(0.12, Math.min(1.5, cam.el));
-  cam.dist = Math.max(1.5, Math.min(4200, cam.dist));
+  // 높이 자료가 110 m 눈금이다. 그보다 더 다가가면 보여 줄 것이 없고
+  // 뭉개진 화면만 남는다 — 3 km 에서 멈춘다.
+  cam.dist = Math.max(3.0, Math.min(4200, cam.dist));
   const y = groundAt(cam.tx, cam.tz);
   const r = cam.dist * Math.cos(cam.el);
   camera.position.set(cam.tx + r * Math.sin(cam.az), y + cam.dist * Math.sin(cam.el),
@@ -585,6 +592,7 @@ function bindControls() {
 
   addEventListener('pointerdown', e => {
     if (overUI(e.target)) return;
+    following = false;                   // 손을 대면 따라가기는 멈춘다
     moved = 0;
     try { el.setPointerCapture(e.pointerId); } catch (_) {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -684,7 +692,7 @@ function bindControls() {
 /** 화면의 한 점을 붙든 채 다가가거나 물러선다 */
 function zoomAt(f, cx, cy) {
   const before = cam.dist;
-  cam.dist = Math.max(1.5, Math.min(4200, cam.dist * f));
+  cam.dist = Math.max(3.0, Math.min(4200, cam.dist * f));
   const moved = 1 - cam.dist / before;
   if (Math.abs(moved) > 1e-4 && cx != null) {
     panBy(-(cx - innerWidth / 2) * moved, -(cy - innerHeight / 2) * moved, before);
@@ -971,27 +979,214 @@ function makeRibbon(pts, widthKm, color, lift, opt) {
   return m;
 }
 
+
+/** 길 위에 화살표를 촘촘히 박는다 — 어느 쪽으로 가는 길인지 한눈에 */
+function makeArrows(pts, sizeKm, color, lift, opt) {
+  opt = opt || {};
+  const v = [], idx = [];
+  const step = sizeKm * 2.8;
+  let acc = step, n = 0;
+  for (let i = 1; i < pts.length; i++) {
+    acc += kmLL(pts[i - 1], pts[i]);
+    if (acc < step) continue;
+    acc = 0;
+    const a = pts[i - 1], b = pts[i];
+    let dx = worldX(b.lon) - worldX(a.lon), dz = worldZ(b.lat) - worldZ(a.lat);
+    const len = Math.hypot(dx, dz); if (len < 1e-6) continue;
+    dx /= len; dz /= len;
+    const px = -dz, pz = dx;
+    const x = worldX(b.lon), z = worldZ(b.lat), y = groundY(b.lat, b.lon) + lift;
+    const t = sizeKm, w = sizeKm * 0.6;
+    const base = n * 3;
+    v.push(x + dx * t, y, z + dz * t);
+    v.push(x - dx * t * 0.45 + px * w, y, z - dz * t * 0.45 + pz * w);
+    v.push(x - dx * t * 0.45 - px * w, y, z - dz * t * 0.45 - pz * w);
+    idx.push(base, base + 1, base + 2);
+    n++;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  g.setIndex(idx);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: opt.opacity != null ? opt.opacity : 0.95,
+    depthTest: opt.through !== true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -10 }));
+  m.renderOrder = opt.order || 7;
+  m.frustumCulled = false;
+  return m;
+}
+
+function disposeObj(o) {
+  if (!o) return;
+  o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material) x.material.dispose(); });
+}
+
+// ── 들르는 곳 표시 ────────────────────────────────────────
+//
+// 길만 그어 놓으면 어디가 출발이고 어디가 도착인지 알 수가 없다.
+// 앱처럼 **눈에 바로 보이게** — 땅에는 기둥을, 화면에는 이름표를 세운다.
+const markPool = [];
+let markPins = null;
+const SLOT_COLOR = { start: 0x6fd08a, via: 0xf2b64c, end: 0xff8a6a };
+
+function buildPins() {
+  if (markPins) { scene.remove(markPins); disposeObj(markPins); markPins = null; }
+  if (!routeStops.length) return;
+  markPins = new THREE.Group();
+  for (const s of routeStops) {
+    const slot = slotOf(s) || 'via';
+    const g = new THREE.ConeGeometry(0.55, 2.4, 6);
+    g.translate(0, 1.2, 0);
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: SLOT_COLOR[slot], transparent: true, opacity: 0.92, depthTest: false }));
+    m.position.set(s.x, s.y + 0.1, s.z);
+    m.renderOrder = 8;
+    m.frustumCulled = false;
+    markPins.add(m);
+  }
+  scene.add(markPins);
+}
+
+function updateStopMarks() {
+  const need = routeStops.length;
+  while (markPool.length < need) {
+    const el = document.createElement('div');
+    el.className = 'rmark';
+    el.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const s = el._site; if (s) { flyTo(s); showCard(s); }
+    });
+    labelRoot.appendChild(el);
+    markPool.push(el);
+  }
+  const v = new THREE.Vector3();
+  for (let i = 0; i < markPool.length; i++) {
+    const el = markPool[i];
+    if (i >= need) { el.style.display = 'none'; continue; }
+    const s = routeStops[i];
+    el._site = s;
+    v.set(s.x, s.y + 2.6, s.z).project(camera);
+    if (v.z > 1 || v.x < -1.2 || v.x > 1.2 || v.y < -1.2 || v.y > 1.2) { el.style.display = 'none'; continue; }
+    const slot = slotOf(s) || 'via';
+    const nth = slot === 'via' ? plan.via.indexOf(s) + 1 : 0;
+    el.className = 'rmark ' + slot;
+    el.textContent = (slot === 'start' ? L.s('출발', 'Start')
+                    : slot === 'end'   ? L.s('도착', 'End')
+                    : L.s('경유', 'Via') + (plan.via.length > 1 && nth ? ' ' + nth : ''))
+                    + ' · ' + L.place(s.ko);
+    el.style.display = '';
+    el.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
+    el.style.top  = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
+  }
+}
+
+const markCSS = document.createElement('style');
+markCSS.textContent =
+  '.rmark{position:absolute;transform:translate(-50%,-100%);white-space:nowrap;pointer-events:auto;' +
+  'cursor:pointer;font:600 11.5px/1 system-ui;padding:5px 9px;border-radius:11px;' +
+  'color:#10130f;box-shadow:0 2px 10px rgba(0,0,0,.55);z-index:2}' +
+  '.rmark.start{background:#6fd08a}.rmark.via{background:#f2b64c}.rmark.end{background:#ff8a6a}';
+document.head.appendChild(markCSS);
+
+// ── 따라가기 ──────────────────────────────────────────────
+//
+// 길을 그려 놓고 보기만 하면 지도지, 여정이 아니다. 길 위를 실제로 걸어야
+// 골짜기와 고개가 눈에 들어온다. 카메라를 길 위에 얹고 앞을 보게 한다.
+let following = false, followKm = 0, followTotal = 0, lastT = 0, lastStop = -1;
+
+function routeLenTo(i) {
+  let d = 0;
+  for (let k = 1; k <= i && k < routePts.length; k++) d += kmLL(routePts[k - 1], routePts[k]);
+  return d;
+}
+
+function followAt(km) {
+  let acc = 0;
+  for (let i = 1; i < routePts.length; i++) {
+    const seg = kmLL(routePts[i - 1], routePts[i]);
+    if (acc + seg >= km) {
+      const t = seg > 0 ? (km - acc) / seg : 0;
+      const a = routePts[i - 1], b = routePts[i];
+      return { lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t,
+               dlat: b.lat - a.lat, dlon: b.lon - a.lon };
+    }
+    acc += seg;
+  }
+  const e = routePts[routePts.length - 1], p = routePts[routePts.length - 2] || e;
+  return { lat: e.lat, lon: e.lon, dlat: e.lat - p.lat, dlon: e.lon - p.lon };
+}
+
+function toggleFollow() {
+  if (!routePts || routePts.length < 2) return false;
+  following = !following;
+  if (following) {
+    followTotal = routeLenTo(routePts.length - 1);
+    if (followKm >= followTotal - 0.5) followKm = 0;
+    lastT = performance.now(); lastStop = -1;
+    cam.dist = Math.min(cam.dist, 26);
+    cam.el = Math.min(cam.el, 0.42);
+  }
+  return following;
+}
+
+function stepFollow() {
+  if (!following || !routePts) return;
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastT) / 1000);
+  lastT = now;
+  // 마흔 초쯤에 다 걷도록 — 길이가 얼마든 지루하지 않게
+  followKm += dt * Math.max(2, followTotal / 40);
+  if (followKm >= followTotal) { followKm = followTotal; following = false; }
+
+  const p = followAt(followKm);
+  cam.tx = worldX(p.lon); cam.tz = worldZ(p.lat);
+  const dx = p.dlon * KM_LON, dz = -p.dlat * KM_LAT;
+  if (Math.hypot(dx, dz) > 1e-6) {
+    // 카메라는 뒤에 서서 나아가는 쪽을 본다
+    let want = Math.atan2(-dx, -dz);
+    let da = want - cam.az;
+    while (da >  Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+    cam.az += da * Math.min(1, dt * 2.2);
+  }
+  applyCam();
+
+  for (let i = 0; i < routeStops.length; i++) {
+    if (i <= lastStop) continue;
+    const s = routeStops[i];
+    if (Math.hypot(worldX(s.lon) - cam.tx, worldZ(s.lat) - cam.tz) < 4) {
+      lastStop = i; showCard(s); break;
+    }
+  }
+}
+
 function clearRoute() {
-  if (routeMesh) { scene.remove(routeMesh); routeMesh.geometry.dispose(); routeMesh.material.dispose(); }
+  if (routeMesh) { scene.remove(routeMesh); disposeObj(routeMesh); }
   routeMesh = null; routePts = null; routeStops = [];
+  if (markPins) { scene.remove(markPins); disposeObj(markPins); markPins = null; }
+  following = false; followKm = 0;
   highlight = null;
 }
 
 function drawRoute() {
-  if (routeMesh) { scene.remove(routeMesh); routeMesh.geometry.dispose(); routeMesh.material.dispose(); routeMesh = null; }
+  if (routeMesh) { scene.remove(routeMesh); disposeObj(routeMesh); routeMesh = null; }
   if (!routePts || routePts.length < 2) return;
   ribbonDist = cam.dist;
-  // 형광펜처럼 굵던 것을 가늘게. 언덕 뒤에서도 비쳐 보이는 것은 그대로 —
-  // 어디로 가는 길인지가 먼저다.
-  routeMesh = makeRibbon(routePts, Math.max(0.42, cam.dist * 0.0032), 0xf2b64c, 0.10,
-                         { through: true, opacity: 0.95, order: 6 });
+  // 굵은 형광펜 한 줄이 아니라 **길잡이 화살표**로 — 어느 쪽으로 가는지가
+  // 먼저 보여야 한다. 가느다란 실선 위에 화살표를 촘촘히 박는다.
+  const w = Math.max(0.30, cam.dist * 0.0022);
+  routeMesh = new THREE.Group();
+  routeMesh.add(makeRibbon(routePts, w, 0x8f6a24, 0.09,
+                           { through: true, opacity: 0.55, order: 6 }));
+  routeMesh.add(makeArrows(routePts, Math.max(0.9, cam.dist * 0.0075), 0xffd27a, 0.10,
+                           { through: true, opacity: 0.95, order: 7 }));
   scene.add(routeMesh);
 }
 
 /** 들름 목록으로 길을 세운다 */
 function setRoute(stops) {
   routeStops = stops.filter(Boolean);
-  if (routeStops.length < 2) { routePts = null; drawRoute(); return 0; }
+  if (routeStops.length < 2) { routePts = null; drawRoute(); buildPins(); return 0; }
   let pts = [];
   for (let i = 0; i < routeStops.length - 1; i++) {
     const seg = smoothPath(roadPath(routeStops[i], routeStops[i + 1]), 1.5);
@@ -999,6 +1194,7 @@ function setRoute(stops) {
   }
   routePts = pts;
   drawRoute();
+  buildPins();
   let km = 0;
   for (let i = 0; i < pts.length - 1; i++) km += kmLL(pts[i], pts[i + 1]);
   return km;
@@ -1236,8 +1432,9 @@ function openRoutes() {
                : slotOf(s) === 'end'   ? L.s('도착', 'End')
                : L.s('경유', 'Via')) + ' · ' + escapeHTML(L.place(s.ko)) +
       '<span data-del="' + s.i + '">✕</span></div>').join('');
-    h += '<div style="margin-top:8px"><button class="rbtn" data-act="fit">' +
-      escapeHTML(L.s('길 전체 보기', 'Fit the route')) + '</button>' +
+    h += '<div style="margin-top:8px"><button class="rbtn" data-act="follow">' +
+      escapeHTML(following ? L.s('멈추기', 'Stop') : L.s('따라가기', 'Travel it')) + '</button>' +
+      '<button class="rbtn" data-act="fit">' + escapeHTML(L.s('길 전체 보기', 'Fit the route')) + '</button>' +
       '<button class="rbtn" data-act="clr">' + escapeHTML(L.s('비우기', 'Clear')) + '</button></div>';
   } else {
     h += escapeHTML(L.s('지명을 누르면 아래에 뜨는 카드에서 출발·경유·도착을 정합니다.',
@@ -1259,8 +1456,10 @@ document.getElementById('pb').addEventListener('click', ev => {
   const j = ev.target.closest('.jrn');
   if (j) {
     const p = PRESETS[+j.dataset.j];
+    following = false; followKm = 0;
     const km = setRoute(p.stops.map(n => siteByName.get(n)).filter(Boolean));
     frameRoute();
+    openRoutes();
     document.getElementById('pSub').textContent =
       Math.round(km) + L.s(' km · ' + p.stops.length + '곳', ' km · ' + p.stops.length + ' stops');
     return;
@@ -1270,7 +1469,8 @@ document.getElementById('pb').addEventListener('click', ev => {
   const go = ev.target.closest('[data-go]');
   if (go) { const s = SITES[+go.dataset.go]; if (s) { flyTo(s); showCard(s); } return; }
   const act = ev.target.dataset.act;
-  if (act === 'fit')  { frameRoute(); }
+  if (act === 'fit')  { following = false; frameRoute(); }
+  if (act === 'follow') { toggleFollow(); openRoutes(); }
   if (act === 'clr')  { plan.start = null; plan.end = null; plan.via = [];
                         clearRoute(); openRoutes(); }
   if (act === 'roads'){ toggleRoads(); openRoutes(); }
@@ -1290,6 +1490,7 @@ document.head.appendChild(routeCSS);
 // ── 돌리기 ────────────────────────────────────────────────
 function tick() {
   requestAnimationFrame(tick);
+  if (following) stepFollow();
   renderer.render(scene, camera);
   updateLabels();
 }
