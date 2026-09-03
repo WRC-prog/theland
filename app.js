@@ -75,14 +75,17 @@ function unpack(o) {                       // {cols, rows} → 객체 배열
 
 async function loadAll() {
   say('자료를 불러오는 중…', 5);
-  const [sites, events, notes, i18n, terrain] = await Promise.all([
+  const [sites, events, notes, i18n, terrain, roads, presets] = await Promise.all([
     loadJSON('data/sites.json'),
     loadJSON('data/events.json'),
     loadJSON('data/notes.json'),
     loadJSON('data/i18n.json'),
-    loadJSON('terrain/terrain.json')
+    loadJSON('terrain/terrain.json'),
+    loadJSON('data/roads.json'),
+    loadJSON('data/presets.json')
   ]);
   I18N = i18n; TERRAIN = terrain;
+  ROADS = unpack(roads); PRESETS = unpack(presets);
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
   SITES = unpack(sites);
@@ -370,6 +373,9 @@ function applyCam() {
   const gy = groundAt(camera.position.x, camera.position.z);
   if (camera.position.y < gy + 0.6) camera.position.y = gy + 0.6;
   camera.lookAt(cam.tx, y, cam.tz);
+  // 길은 세계 눈금으로 그리므로 멀어지면 실오라기가 되고 다가가면 밭두렁이 된다.
+  // 배쯤 달라졌을 때만 다시 굽는다 — 끌 때마다 다시 만들 일은 아니다.
+  if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.5) drawRoute();
   updateHUD();
 }
 
@@ -522,6 +528,7 @@ function addViewButtons() {
   };
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로)
   mk('⌄', L.s('눕히기', 'Lower the view'),  () => { cam.el -= 0.16; applyCam(); });
+  mk('⇢', L.s('길', 'Journeys'), openRoutes);
   mk('⌃', L.s('세우기', 'Raise the view'),  () => { cam.el += 0.16; applyCam(); });
   mk('−', L.s('물러서기', 'Zoom out'),      () => zoomAt(1.35));
   mk('＋', L.s('다가가기', 'Zoom in'),       () => zoomAt(1 / 1.35));
@@ -564,7 +571,8 @@ function openPlace(s) {
       '<h3>' + escapeHTML(t) + '</h3><p>' + escapeHTML(x) + '</p>' +
       '<span class="ref">' + escapeHTML(L.ref(e.ref)) + '</span></div>';
   }
-  body.innerHTML = html;
+  body.innerHTML = '<div class="note"><button class="rbtn" data-act="add" data-i="' + s.i + '">'
+    + escapeHTML(L.s('길에 넣기', 'Add to route')) + '</button></div>' + html;
   body.scrollTop = 0;
   panel.classList.add('open');
 }
@@ -629,6 +637,236 @@ function applyLang() {
     if (s) openPlace(s);
   }
 }
+
+
+// ── 옛길과 경로 ───────────────────────────────────────────
+//
+// 두 곳을 곧은 자로 이으면 산등성이와 바다를 가로지른다. 실제로 사람이
+// 다닌 길은 정해져 있었다 — 해안 길, 왕의 대로, 산지 능선길. 그래서
+// 옛길 65갈래를 **그물**로 엮어 두고 그 위로 가장 짧은 길을 찾는다.
+// 길에서 멀리 떨어진 곳(광야·바다 건너)은 어쩔 수 없이 곧게 잇는다.
+let ROADS = [], PRESETS = [];
+let roadNet = null;                       // {n:[{lat,lon,e:[[j,km]…]}]}
+let routeMesh = null, roadsMesh = null, routeStops = [], routePts = null, ribbonDist = 0;
+
+function kmLL(a, b) {
+  return Math.hypot((a.lon - b.lon) * KM_LON, (a.lat - b.lat) * KM_LAT);
+}
+
+function buildRoadNet() {
+  if (roadNet) return roadNet;
+  const n = [];
+  const link = (i, j) => {
+    const d = kmLL(n[i], n[j]);
+    n[i].e.push([j, d]); n[j].e.push([i, d]);
+  };
+  for (const r of ROADS) {
+    let prev = -1;
+    for (const p of r.pts) {
+      n.push({ lat: p[0], lon: p[1], e: [] });
+      const i = n.length - 1;
+      if (prev >= 0) link(prev, i);
+      prev = i;
+    }
+  }
+  // 길과 길이 만나는 자리 — 4 km 안에 있으면 갈아탈 수 있다고 본다
+  for (let i = 0; i < n.length; i++)
+    for (let j = i + 1; j < n.length; j++)
+      if (Math.abs(n[i].lat - n[j].lat) < 0.05 && Math.abs(n[i].lon - n[j].lon) < 0.05
+          && kmLL(n[i], n[j]) < 4) link(i, j);
+  roadNet = { n };
+  return roadNet;
+}
+
+function nearestNode(p) {
+  const { n } = buildRoadNet();
+  let bi = -1, bd = 1e9;
+  for (let i = 0; i < n.length; i++) { const d = kmLL(n[i], p); if (d < bd) { bd = d; bi = i; } }
+  return { i: bi, km: bd };
+}
+
+/** 옛길 위로 a 에서 b 까지. 길이 멀면 곧게 잇는다. */
+function roadPath(a, b) {
+  const A = nearestNode(a), B = nearestNode(b);
+  if (A.km > 35 || B.km > 35 || A.i < 0 || B.i < 0) return [a, b];
+  const { n } = roadNet;
+  const dist = new Float64Array(n.length).fill(Infinity);
+  const prev = new Int32Array(n.length).fill(-1);
+  const done = new Uint8Array(n.length);
+  dist[A.i] = 0;
+  for (;;) {
+    let u = -1, bd = Infinity;
+    for (let i = 0; i < n.length; i++) if (!done[i] && dist[i] < bd) { bd = dist[i]; u = i; }
+    if (u < 0 || u === B.i) break;
+    done[u] = 1;
+    for (const [v, w] of n[u].e) if (dist[u] + w < dist[v]) { dist[v] = dist[u] + w; prev[v] = u; }
+  }
+  if (!isFinite(dist[B.i])) return [a, b];
+  const mid = [];
+  for (let i = B.i; i >= 0; i = prev[i]) mid.unshift({ lat: n[i].lat, lon: n[i].lon });
+  return [a, ...mid, b];
+}
+
+/** 마디마다 3 km 안쪽으로 잘게 나눈다 — 그래야 땅을 타고 흐른다 */
+function densify(pts, stepKm) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const k = Math.max(1, Math.ceil(kmLL(a, b) / stepKm));
+    for (let t = 0; t < k; t++)
+      out.push({ lat: a.lat + (b.lat - a.lat) * t / k, lon: a.lon + (b.lon - a.lon) * t / k });
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+function makeRibbon(pts, widthKm, color, lift) {
+  const v = [], idx = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[Math.min(i + 1, pts.length - 1)], o = pts[Math.max(i - 1, 0)];
+    const dx = worldX(q.lon) - worldX(o.lon), dz = worldZ(q.lat) - worldZ(o.lat);
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
+    const x = worldX(p.lon), z = worldZ(p.lat), y = groundY(p.lat, p.lon) + lift;
+    v.push(x + nx, y, z + nz, x - nx, y, z - nz);
+    if (i < pts.length - 1) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  g.setIndex(idx);
+  // 땅에 파묻히지 않게 깊이 견주기를 끈다 — 언덕 너머의 길도 비쳐 보인다
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
+  m.renderOrder = 5;
+  m.frustumCulled = false;
+  return m;
+}
+
+function clearRoute() {
+  if (routeMesh) { scene.remove(routeMesh); routeMesh.geometry.dispose(); routeMesh.material.dispose(); }
+  routeMesh = null; routePts = null; routeStops = [];
+  highlight = null;
+}
+
+function drawRoute() {
+  if (routeMesh) { scene.remove(routeMesh); routeMesh.geometry.dispose(); routeMesh.material.dispose(); routeMesh = null; }
+  if (!routePts || routePts.length < 2) return;
+  ribbonDist = cam.dist;
+  routeMesh = makeRibbon(routePts, Math.max(0.9, cam.dist * 0.0055), 0xfdcc61, 0.25);
+  scene.add(routeMesh);
+}
+
+/** 들름 목록으로 길을 세운다 */
+function setRoute(stops) {
+  routeStops = stops.filter(Boolean);
+  if (routeStops.length < 2) { routePts = null; drawRoute(); return 0; }
+  let pts = [];
+  for (let i = 0; i < routeStops.length - 1; i++) {
+    const seg = densify(roadPath(routeStops[i], routeStops[i + 1]), 3);
+    pts = pts.concat(i ? seg.slice(1) : seg);
+  }
+  routePts = pts;
+  drawRoute();
+  let km = 0;
+  for (let i = 0; i < pts.length - 1; i++) km += kmLL(pts[i], pts[i + 1]);
+  return km;
+}
+
+function frameRoute() {
+  if (!routePts || !routePts.length) return;
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const p of routePts) {
+    const x = worldX(p.lon), z = worldZ(p.lat);
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (z < z0) z0 = z; if (z > z1) z1 = z;
+  }
+  cam.tx = (x0 + x1) / 2; cam.tz = (z0 + z1) / 2;
+  cam.dist = Math.max(30, Math.hypot(x1 - x0, z1 - z0) * 1.15);
+  applyCam(); drawRoute();
+}
+
+function toggleRoads() {
+  if (roadsMesh) {
+    scene.remove(roadsMesh);
+    roadsMesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    roadsMesh = null;
+    return false;
+  }
+  roadsMesh = new THREE.Group();
+  for (const r of ROADS) {
+    const pts = densify(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 4);
+    const m = makeRibbon(pts, Math.max(0.5, cam.dist * 0.0022), 0xc9b48a, 0.1);
+    m.material.opacity = 0.5;
+    roadsMesh.add(m);
+  }
+  scene.add(roadsMesh);
+  return true;
+}
+
+// ── 경로 판 ───────────────────────────────────────────────
+let pickList = [];                        // 내가 고른 곳들
+
+function openRoutes() {
+  document.getElementById('pTitle').textContent = L.s('길', 'Journeys');
+  document.getElementById('pSub').textContent = L.s('옛길을 따라갑니다', 'Along the ancient roads');
+  const b = document.getElementById('pb');
+  let h = '<div class="note"><em>' + escapeHTML(L.s('내가 고른 길', 'Your own route')) + '</em>';
+  if (pickList.length) {
+    h += pickList.map((s, i) => '<div class="rstop" data-go="' + s.i + '">' + (i + 1) + '. ' +
+      escapeHTML(L.place(s.ko)) + '<span data-del="' + i + '">✕</span></div>').join('');
+    h += '<div style="margin-top:8px"><button class="rbtn" data-act="go">' +
+      escapeHTML(L.s('이 길로', 'Draw it')) + '</button>' +
+      '<button class="rbtn" data-act="clr">' + escapeHTML(L.s('비우기', 'Clear')) + '</button></div>';
+  } else {
+    h += escapeHTML(L.s('지명을 눌러 연 다음 「길에 넣기」를 누르면 여기에 쌓입니다.',
+                        'Open a place and press “Add to route”.'));
+  }
+  h += '</div><div class="note"><em>' + escapeHTML(L.s('옛길', 'Ancient roads')) + '</em>' +
+    '<button class="rbtn" data-act="roads">' + escapeHTML(roadsMesh
+      ? L.s('감추기', 'Hide') : L.s('보이기', 'Show')) + '</button></div>';
+  h += PRESETS.map((p, i) => '<div class="ep jrn" data-j="' + i + '"><h3>' +
+    escapeHTML(L.cur === 'ko' ? p.ko : p.en) + '</h3><p>' +
+    escapeHTML(L.cur === 'ko' ? p.detailKo : p.detailEn) + '</p><span class="ref">' +
+    p.stops.length + L.s('곳', ' stops') + '</span></div>').join('');
+  b.innerHTML = h;
+  b.scrollTop = 0;
+  panel.classList.add('open');
+}
+
+document.getElementById('pb').addEventListener('click', ev => {
+  const j = ev.target.closest('.jrn');
+  if (j) {
+    const p = PRESETS[+j.dataset.j];
+    const km = setRoute(p.stops.map(n => siteByName.get(n)).filter(Boolean));
+    frameRoute();
+    document.getElementById('pSub').textContent =
+      Math.round(km) + L.s(' km · ' + p.stops.length + '곳', ' km · ' + p.stops.length + ' stops');
+    return;
+  }
+  const del = ev.target.dataset.del;
+  if (del != null) { pickList.splice(+del, 1); openRoutes(); return; }
+  const go = ev.target.closest('[data-go]');
+  if (go) { const s = SITES[+go.dataset.go]; if (s) flyTo(s); return; }
+  const act = ev.target.dataset.act;
+  if (act === 'go')   { const km = setRoute(pickList); frameRoute();
+                        document.getElementById('pSub').textContent = Math.round(km) + ' km'; }
+  if (act === 'clr')  { pickList = []; clearRoute(); openRoutes(); }
+  if (act === 'roads'){ toggleRoads(); openRoutes(); }
+  if (act === 'add')  { const s = SITES[+ev.target.dataset.i];
+                        if (s && !pickList.includes(s)) pickList.push(s);
+                        ev.target.textContent = L.s('넣었습니다', 'Added'); }
+});
+
+const routeCSS = document.createElement('style');
+routeCSS.textContent =
+  '.rbtn{border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--ink);' +
+  'font:inherit;font-size:12.5px;cursor:pointer;padding:6px 11px;border-radius:9px;margin-right:6px}' +
+  '.rbtn:hover{background:rgba(255,255,255,.13)}' +
+  '.rstop{padding:5px 0;font-size:13px;display:flex;justify-content:space-between;cursor:pointer}' +
+  '.rstop span{color:#8d867a;padding:0 4px}' +
+  '.rstop span:hover{color:#ff9d86}' +
+  '.jrn{cursor:pointer} .jrn:hover h3{color:var(--gold)}';
+document.head.appendChild(routeCSS);
 
 // ── 돌리기 ────────────────────────────────────────────────
 function tick() {
