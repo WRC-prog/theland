@@ -1,28 +1,99 @@
 {
  "encoding": "R*256+G, 미터 = 값 - 6000",
  "tiles": [
-  { "file": "canaan.png", "w": 4730, "h": 6308,
-    "mid": "canaan_mid.png", "low": "canaan_low.png",
-    "lonMin": 33.9, "lonMax": 36.9, "latMin": 30.2, "latMax": 33.6, "mPerPx": 60 },
-  { "file": "region.png", "w": 6256, "h": 3950,
-    "mid": "region_mid.png", "low": "region_low.png",
-    "lonMin": 11.0, "lonMax": 52.00057877069105, "latMin": 21.0, "latMax": 43.0, "mPerPx": 620 }
+  {
+   "file": "canaan.png",
+   "w": 4730,
+   "h": 6308,
+   "mid": "canaan_mid.png",
+   "low": "canaan_low.png",
+   "lonMin": 33.9,
+   "lonMax": 36.9,
+   "latMin": 30.2,
+   "latMax": 33.6,
+   "mPerPx": 60
+  },
+  {
+   "file": "region.png",
+   "w": 6256,
+   "h": 3950,
+   "mid": "region_mid.png",
+   "low": "region_low.png",
+   "lonMin": 11,
+   "lonMax": 52.00057877069105,
+   "latMin": 21,
+   "latMax": 43,
+   "mPerPx": 620
+  }
  ],
  "regions": [
-  { "file": "syria_rgb.png",
-    "lonMin": 34.0, "lonMax": 39.0, "latMin": 33.0, "latMax": 37.5, "mPerPx": 200 },
-  { "file": "mesopotamia_rgb.png",
-    "lonMin": 38.0, "lonMax": 49.0, "latMin": 29.0, "latMax": 38.0, "mPerPx": 200,
-    "clipBy": ["syria_rgb.png"] },
-  { "file": "anatolia_rgb.png",
-    "lonMin": 26.0, "lonMax": 37.0, "latMin": 35.0, "latMax": 42.0, "mPerPx": 200,
-    "clipBy": ["syria_rgb.png"] },
-  { "file": "greece_rgb.png",
-    "lonMin": 19.0, "lonMax": 27.0, "latMin": 34.5, "latMax": 42.0, "mPerPx": 200,
-    "clipBy": ["anatolia_rgb.png"] },
-  { "file": "italy_rgb.png",
-    "lonMin": 11.0, "lonMax": 19.0, "latMin": 36.0, "latMax": 46.0, "mPerPx": 200 },
-  { "file": "egypt_rgb.png",
-    "lonMin": 29.0, "lonMax": 35.0, "latMin": 22.0, "latMax": 32.0, "mPerPx": 200 }
+  {
+   "file": "syria_rgb.png",
+   "lonMin": 34,
+   "lonMax": 39,
+   "latMin": 33,
+   "latMax": 37.5,
+   "mPerPx": 200
+  },
+  {
+   "file": "cyprus_rgb.png",
+   "lonMin": 32,
+   "lonMax": 35,
+   "latMin": 34.2,
+   "latMax": 36,
+   "mPerPx": 200,
+   "clipBy": [
+    "syria_rgb.png"
+   ]
+  },
+  {
+   "file": "mesopotamia_rgb.png",
+   "lonMin": 38,
+   "lonMax": 49,
+   "latMin": 29,
+   "latMax": 38,
+   "mPerPx": 200,
+   "clipBy": [
+    "syria_rgb.png"
+   ]
+  },
+  {
+   "file": "anatolia_rgb.png",
+   "lonMin": 26,
+   "lonMax": 37,
+   "latMin": 35,
+   "latMax": 42,
+   "mPerPx": 200,
+   "clipBy": [
+    "syria_rgb.png"
+   ]
+  },
+  {
+   "file": "greece_rgb.png",
+   "lonMin": 19,
+   "lonMax": 27,
+   "latMin": 34.5,
+   "latMax": 42,
+   "mPerPx": 200,
+   "clipBy": [
+    "anatolia_rgb.png"
+   ]
+  },
+  {
+   "file": "italy_rgb.png",
+   "lonMin": 11,
+   "lonMax": 19,
+   "latMin": 36,
+   "latMax": 46,
+   "mPerPx": 200
+  },
+  {
+   "file": "egypt_rgb.png",
+   "lonMin": 29,
+   "lonMax": 35,
+   "latMin": 22,
+   "latMax": 32,
+   "mPerPx": 200
+  }
  ]
 }
