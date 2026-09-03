@@ -1173,17 +1173,7 @@ function addViewButtons() {
     '#tools .btn{display:inline-flex;align-items:center;gap:5px;padding:9px 12px;white-space:nowrap}' +
     '#tools .btn i{font-style:normal;font-size:13px;opacity:.85}' +
     '#tools .btn u{text-decoration:none;font-size:12.5px;font-weight:600}' +
-    // 폰에서는 한 줄에 다 들어가지 않는다. 찾기 칸을 위로 한 줄 빼고,
-    // 단추는 그림 아래에 이름을 붙여 작게 세운다 — 눌러 보지 않아도 알게.
-    '@media (max-width:660px){' +
-      '#top{flex-wrap:wrap;gap:6px;padding:8px}' +
-      '#search{flex:1 1 100%;max-width:none;order:0}' +
-      '#tools{order:1;flex:1 1 auto;flex-wrap:wrap;justify-content:space-around;gap:0}' +
-      '#qualPick{order:2}' +
-      '#tools .btn{flex-direction:column;gap:1px;padding:5px 6px;min-width:44px}' +
-      '#tools .btn u{display:block;font-size:9.5px;font-weight:600;letter-spacing:-.02em}' +
-      '#tools .btn i{font-size:15px;opacity:.95}' +
-    '}';
+    '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}';
   document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
