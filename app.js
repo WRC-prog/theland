@@ -1246,6 +1246,10 @@ function addViewButtons() {
       '#search{flex:1 1 100%;max-width:none;order:2}' +
       '#q{padding:12px 14px;font-size:16px}' +
       '#tools,#qualPick,#live,#hud{order:1}' +
+      // 윗줄과 찾기 칸의 오른쪽 끝을 맞춘다. 예전에는 윗줄이 왼쪽에
+      // 몰려 끝나서, 찾기 칸만 오른쪽으로 조금 더 나가 보였다.
+      '#tools{flex:1 1 auto;justify-content:space-between}' +
+      '#qualPick{flex:0 0 auto}' +
     '}';
   document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
