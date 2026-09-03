@@ -263,18 +263,33 @@ function makeTerrain(tile, segX, segZ, tex, clip) {
         if (h <1600.0) return mix(vec3(0.58,0.46,0.32), vec3(0.52,0.44,0.40), (h-900.0)/700.0);
         return mix(vec3(0.52,0.44,0.40), vec3(0.88,0.89,0.92), clamp((h-1600.0)/900.0,0.0,1.0));
       }
+      // 칸과 칸 사이를 **이어서** 읽는다.
+      //
+      // 높이 값은 칸마다 딱 떨어지게 담겨 있어서, 그냥 읽으면 다가갈수록
+      // 110 m 짜리 네모가 드러난다 — 레고처럼 보이던 것이 그것이다.
+      // 이웃한 네 칸을 섞어 읽으면 색도 그늘도 매끄럽게 이어진다.
+      // (땅의 모양 자체는 판의 꼭짓점 간격만큼만 자세하다. 그건 자료가
+      //  가진 만큼이지 그리는 방법의 문제가 아니다)
+      float hLin(vec2 uv){
+        vec2 p = uv / texel - 0.5;
+        vec2 f = fract(p);
+        vec2 b = (floor(p) + 0.5) * texel;
+        return mix(mix(height(b), height(b + vec2(texel.x, 0.0)), f.x),
+                   mix(height(b + vec2(0.0, texel.y)), height(b + texel), f.x), f.y);
+      }
       void main(){
         // 가나안 판이 맡은 자리는 넘기고 그리지 않는다 — 겹치면 서로 파고든다
         if (vWorld.x > clip.x && vWorld.x < clip.z &&
             vWorld.z > clip.y && vWorld.z < clip.w) discard;
-        float hl = height(vUv - vec2(texel.x, 0.0));
-        float hr = height(vUv + vec2(texel.x, 0.0));
-        float hu = height(vUv - vec2(0.0, texel.y));
-        float hd = height(vUv + vec2(0.0, texel.y));
+        float h  = hLin(vUv);
+        float hl = hLin(vUv - vec2(texel.x, 0.0));
+        float hr = hLin(vUv + vec2(texel.x, 0.0));
+        float hu = hLin(vUv - vec2(0.0, texel.y));
+        float hd = hLin(vUv + vec2(0.0, texel.y));
         vec3 n = normalize(vec3((hl - hr) * 0.02, 1.0, (hu - hd) * 0.02));
         float lam = clamp(dot(n, sun), 0.0, 1.0);
-        vec3 col = ramp(vH) * (0.42 + 0.78 * lam);
-        if (vH < 0.0) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
+        vec3 col = ramp(h) * (0.42 + 0.78 * lam);
+        if (h < 0.0) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
         float d = length(vWorld - cameraPosition);
         float f = 1.0 - exp(-fogDen * fogDen * d * d);
         gl_FragColor = vec4(mix(col, fogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -752,7 +767,7 @@ function drawRoute() {
   if (routeMesh) { scene.remove(routeMesh); routeMesh.geometry.dispose(); routeMesh.material.dispose(); routeMesh = null; }
   if (!routePts || routePts.length < 2) return;
   ribbonDist = cam.dist;
-  routeMesh = makeRibbon(routePts, Math.max(0.9, cam.dist * 0.0055), 0xfdcc61, 0.25);
+  routeMesh = makeRibbon(routePts, Math.max(1.6, cam.dist * 0.009), 0xfdcc61, 0.25);
   scene.add(routeMesh);
 }
 
