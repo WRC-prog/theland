@@ -1521,7 +1521,34 @@ function buildPins() {
   for (let i = 0; i < routeStops.length; i++) if (stopKm[i] == null) stopKm[i] = null;
 }
 
+// 길이 서면 지도 위에 바로 뜨는 단추. 판을 열고 또 누를 까닭이 없다.
+let goBtn = null;
+function syncGoBtn() {
+  if (!goBtn) {
+    goBtn = document.createElement('button');
+    goBtn.id = 'goBtn';
+    goBtn.addEventListener('click', () => { toggleFollow(); syncGoBtn();
+      if (panelIsRoutes && panel.classList.contains('open')) openRoutes(); });
+    document.body.appendChild(goBtn);
+    const st = document.createElement('style');
+    st.textContent =
+      '#goBtn{position:fixed;left:50%;bottom:74px;transform:translateX(-50%);z-index:26;' +
+      'display:none;align-items:center;gap:7px;border:0;cursor:pointer;' +
+      'padding:0 20px;height:42px;border-radius:21px;background:#f2b64c;color:#231702;' +
+      'font:700 14px/1 inherit;box-shadow:0 4px 18px rgba(0,0,0,.45)}' +
+      '#goBtn.on{display:flex}' +
+      '#goBtn.going{background:rgba(20,20,24,.9);color:#f2b64c;' +
+      'border:1px solid rgba(242,182,76,.6)}' +
+      '@media (max-width:560px){#goBtn{bottom:84px}}';
+    document.head.appendChild(st);
+  }
+  const has = !!(routePts && routePts.length > 1);
+  goBtn.className = (has ? 'on' : '') + (following ? ' going' : '');
+  goBtn.textContent = following ? L.s('■  멈추기', '■  Stop') : L.s('▶  따라가기', '▶  Travel it');
+}
+
 function updateStopMarks() {
+  syncGoBtn();
   const need = routeStops.length;
   while (markPool.length < need) {
     const el = document.createElement('div');
@@ -1853,7 +1880,8 @@ function assign(s, slot) {
   }
   setRoute(planStops());
   showCard(s);
-  if (panelIsRoutes) openRoutes();
+  // 판은 **열려 있을 때만** 다시 그린다. 닫아 둔 것을 제멋대로 열지 않는다.
+  if (panelIsRoutes && panel.classList.contains('open')) openRoutes();
 }
 
 let cardEl = null;
@@ -1868,10 +1896,12 @@ function showCard(s) {
       if (slot) { assign(cardSite, slot); return; }
       if (ev.target.id === 'cMinus') {
         unassign(cardSite); setRoute(planStops()); showCard(cardSite);
-        if (panelIsRoutes) openRoutes();
+        if (panelIsRoutes && panel.classList.contains('open')) openRoutes();
         return;
       }
       if (ev.target.id === 'cX') { cardEl.classList.remove('on'); highlight = null; return; }
+      if (ev.target.id === 'cInfo') { openPlace(cardSite); return; }
+      // 이름을 눌러도 열리게 두되, 그 밖에는 옆 판이 저절로 나오지 않는다
       if (ev.target.closest('#cName')) openPlace(cardSite);
     });
   }
@@ -1880,12 +1910,14 @@ function showCard(s) {
   const here = slotOf(s);
   const pill = (k, t) => '<button class="cslot' + (here === k ? ' on' : '') + '" data-slot="' + k + '">' + t + '</button>';
   cardEl.innerHTML =
-    '<div id="cName">' + escapeHTML(L.place(s.ko)) + (eps || note ? ' <i>▤</i>' : '') +
+    '<div id="cName">' + escapeHTML(L.place(s.ko)) +
     '<small>' + escapeHTML(L.region(s.region)) +
     ' · ' + Math.round(s.y / (0.001 * VEXAG)) + ' m' +
     ' · ' + s.lat.toFixed(3) + '°N ' + s.lon.toFixed(3) + '°E' +
     (eps ? ' · <b>' + L.s('사건 ' + eps, eps + ' records') + '</b>' : '') + '</small></div>' +
     '<span class="cgap"></span>' +
+    // 기록이 있는 곳에만 「정보」를 둔다 — 누구나 알아보게 글자로.
+    (eps || note ? '<button id="cInfo">' + escapeHTML(L.s('정보', 'Info')) + '</button>' : '') +
     pill('start', L.s('출발', 'Start')) + pill('via', L.s('경유', 'Via')) + pill('end', L.s('도착', 'End')) +
     // 이미 길에 든 곳이면 그 자리에서 뺄 수 있어야 한다 (앱과 같다)
     (here ? '<button id="cMinus" title="' + L.s('길에서 빼기', 'Remove from route') + '">⊖</button>' : '') +
@@ -1903,7 +1935,10 @@ cardCSS.textContent =
   '#card.on{transform:translate(-50%,0);opacity:1;pointer-events:auto}' +
   '#cName{font:600 15px/1.25 Georgia,"Apple SD Gothic Neo",serif;color:var(--ink);cursor:pointer;' +
   'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}' +
-  '#cName i{font-style:normal;color:var(--gold);font-size:11px}' +
+  '#cInfo{border:1px solid rgba(253,204,97,.5);background:rgba(253,204,97,.12);' +
+  'color:#fdcc61;font:600 12px/1 inherit;cursor:pointer;padding:0 12px;height:30px;' +
+  'border-radius:15px;margin-right:2px}' +
+  '#cInfo:hover{background:rgba(253,204,97,.22)}' +
   '#cName small{display:block;font:400 10.5px/1.4 system-ui;color:rgba(255,255,255,.55)}' +
   '#cName small b{color:rgba(253,204,97,.85);font-weight:400}' +
   '.cgap{flex:1;min-width:8px}' +
@@ -1996,7 +2031,7 @@ document.getElementById('pb').addEventListener('click', ev => {
   if (go) { const s = SITES[+go.dataset.go]; if (s) { flyTo(s); showCard(s); } return; }
   const act = ev.target.dataset.act;
   if (act === 'fit')  { following = false; frameRoute(); }
-  if (act === 'follow') { toggleFollow(); openRoutes(); }
+  if (act === 'follow') { toggleFollow(); syncGoBtn(); openRoutes(); }
   if (act === 'clr')  { plan.start = null; plan.end = null; plan.via = [];
                         clearRoute(); openRoutes(); }
   if (act === 'roads'){ toggleRoads(); openRoutes(); }
