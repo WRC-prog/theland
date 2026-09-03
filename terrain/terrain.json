@@ -1,0 +1,25 @@
+{
+ "encoding": "R*256+G, 미터 = 값 - 6000",
+ "tiles": [
+  {
+   "file": "terrain/canaan.png",
+   "w": 3000,
+   "h": 3400,
+   "lonMin": 33.9,
+   "lonMax": 36.9,
+   "latMin": 30.2,
+   "latMax": 33.6,
+   "mPerPx": 110
+  },
+  {
+   "file": "terrain/region.png",
+   "w": 3280,
+   "h": 1760,
+   "lonMin": 11.0,
+   "lonMax": 47.0,
+   "latMin": 21.0,
+   "latMax": 43.0,
+   "mPerPx": 1380
+  }
+ ]
+}
