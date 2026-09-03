@@ -214,8 +214,23 @@ async function loadAll() {
   REGIONS = terrain.regions || [];
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
   AREAS = areas || { tribes: [], nations: [] };
-  for (const a of (AREAS.tribes || [])) AREACOLOR.set(a.ko, a.color);
-  for (const a of (AREAS.nations || [])) AREACOLOR.set(a.ko, a.color);
+  // 시대 이름표를 다시 세운다.
+  //
+  // 예전에는 지파(5)와 나머지 셋이 한 등급(6)에 뭉쳐 있어, 족장 시대의 민족과
+  // 1세기의 갈릴리와 분열 왕국이 한 지도에 겹쳐 떴다. 눈이 어지러울 수밖에.
+  // 등급을 넷으로 가르고, 이름표는 areas.json 에서 새로 세운다.
+  SITES = SITES.filter(x => x.rank !== 5 && x.rank !== 6);
+  for (const kind in AREAKIND) {
+    for (const a of (AREAS[AREAKIND[kind]] || [])) {
+      AREACOLOR.set(kind + '\u0000' + a.ko, a.color);
+      const en = (I18N.place && I18N.place[a.ko]) || a.ko;
+      SITES.push({ ko: a.ko, en: en, lat: a.at[0], lon: a.at[1],
+                   region: kind === 'tribe' ? '지파' : kind === 'nation' ? '민족'
+                         : kind === 'first' ? '1세기' : '분열 왕국',
+                   rank: AREARANK[kind], era: kind });
+    }
+  }
+  SITES.forEach((x, i) => { x.i = i; if (!x.f) x.f = fold(x.ko) + '' + fold(x.en); });
   I18N = i18n;
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
@@ -778,7 +793,7 @@ const DETAILS = [
     hintEn: 'Everything, down to gates and springs' }
 ];
 // 갈래마다 따로 정한다 — 성읍은 아주 자세히, 지형은 간단히 보고 싶을 수 있다.
-const DET = { city: 3, land: 3, water: 3, tribe: 3, nation: 3, inner: 3 };
+const DET = { city: 3, land: 3, water: 3, tribe: 3, nation: 3, first: 3, divided: 3, inner: 3 };
 try {
   const sv = JSON.parse(localStorage.getItem('theland.detail2') || 'null');
   if (sv) {
@@ -807,7 +822,7 @@ function detailMul(rank) {
     case 4:  return D >= 2 ? 1.8 : (D === 1 ? 1.2 : 0);
     case 7:  return D >= 2 ? 1.8 : (D === 1 ? 1.2 : 0);
     case 8:  return D >= 1 ? 2.4 : 0;
-    case 5: case 6: case 9: return 9.0;
+    case 5: case 6: case 9: case 11: case 12: return 9.0;
     case 10: return D >= 3 ? 0.55 : 0;
     default: return D >= 4 ? 1.20 : (D === 3 ? 0.95 : 0);
   }
@@ -825,9 +840,17 @@ const LAYERS = [
   { k: 'water',  ko: '물길',  en: 'Waters',  ranks: [7],          on: true,
     hintKo: '강과 급류 골짜기의 이름', hintEn: 'Rivers and torrent valleys' },
   { k: 'tribe',  ko: '지파',  en: 'Tribes',  ranks: [5],          on: false,
-    hintKo: '이스라엘 열두 지파가 받은 땅', hintEn: 'The lands of the twelve tribes' },
+    hintKo: '이스라엘 열두 지파가 받은 땅 (정착 이후)',
+    hintEn: 'The lands of the twelve tribes (after the settlement)' },
   { k: 'nation', ko: '민족',  en: 'Nations', ranks: [6],          on: false,
-    hintKo: '둘레에 살던 민족들의 땅', hintEn: 'The lands of the surrounding nations' },
+    hintKo: '정복 이전에 그 땅에 살던 민족들',
+    hintEn: 'The peoples living there before the conquest' },
+  { k: 'first',  ko: '1세기', en: 'First century', ranks: [11],   on: false,
+    hintKo: '갈릴리 · 사마리아 · 유대 · 데카폴리스 …',
+    hintEn: 'Galilee, Samaria, Judea, the Decapolis …' },
+  { k: 'divided', ko: '분열 왕국', en: 'Divided kingdom', ranks: [12], on: false,
+    hintKo: '유다 왕국과 이스라엘 왕국',
+    hintEn: 'The kingdoms of Judah and Israel' },
   { k: 'inner',  ko: '성 안', en: 'Inside a city', ranks: [10],   on: true,
     hintKo: '예루살렘·로마 등 성 안의 자리 (가까이 가야 보입니다)',
     hintEn: 'Places inside Jerusalem, Rome … (only up close)' }
@@ -858,9 +881,9 @@ function updateLabels() {
     if (!keep) {
     // 지파·민족·지역 이름은 넓은 땅의 이름이라 물러섰을 때만 뜬다.
     // 산 · 산맥 · 골짜기 · 물길은 그렇지 않다 — 가까이서도 보여야 한다.
-    if ((s.rank === 5 || s.rank === 6 || s.rank === 9) && cam.dist < 60) continue;
-    if (s.rank === 5 && !areaShown('tribe', s.ko)) continue;
-    if (s.rank === 6 && !areaShown('nation', s.ko)) continue;
+    if (s.era && cam.dist < 60) continue;
+    if (s.era && !areaShown(s.era, s.ko)) continue;
+    if (s.rank === 9 && cam.dist < 60) continue;
     const mul = detailMul(s.rank);
     if (mul <= 0) continue;
     }
@@ -871,7 +894,7 @@ function updateLabels() {
     // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
     // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
-    const era = (s.rank === 5 || s.rank === 6 || s.rank === 9);
+    const era = !!s.era || s.rank === 9;
     cand.push({ s, keep: keep, sx: (v.x * .5 + .5) * innerWidth,
                 sy: (-v.y * .5 + .5) * innerHeight, d,
                 score: (keep ? -2000000 : era ? -900000 : s.rank * 1000) + d });
@@ -912,7 +935,7 @@ function updateLabels() {
                    (highlight === s.ko ? ' on' : '');
     el.innerHTML = (ref || has ? '<i></i>' : '') + escapeHTML(L.cur === 'ko' ? s.ko : s.en);
     // 지파·민족은 앱처럼 **그 땅 색의 판 위에 큰 흰 글씨**로 앉힌다.
-    const ac = (s.rank === 5 || s.rank === 6) ? AREACOLOR.get(s.ko) : null;
+    const ac = s.era ? AREACOLOR.get(s.era + '\u0000' + s.ko) : null;
     if (ac) {
       const p = (m, al) => 'rgba(' + ac.map(v => Math.round(Math.min(255, v * 255 * m))).join(',') +
                            ',' + al + ')';
@@ -961,6 +984,126 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+// ── 시점 — 땅에 내려서서 ────────────────────────────────────
+//
+// 하늘에서 내려다보는 지도가 아니라, 그 땅에 서서 둘레를 보는 눈이다.
+// 조이스틱으로 걸어 다니고, 걸음새는 걷기 · 낙타 · 전차 가운데 고른다.
+// (실제 걸음보다 빠르게 잡았다. 실측대로 두면 한 골짜기를 건너는 데
+//  반나절이 걸려, 지도를 보러 온 사람에게는 재미가 없다.)
+let fpv = false, fpvBtn = null, eyeM = 12;
+const TRAVEL = [
+  { ko: '걷기', en: 'Walk',    mps: 6  },
+  { ko: '낙타', en: 'Camel',   mps: 14 },
+  { ko: '전차', en: 'Chariot', mps: 30 }
+];
+let travelIdx = 0;
+const joyVec = { x: 0, y: 0 };
+let joyEl = null, joyKnob = null, travelEl = null;
+
+function stepFpv(dt) {
+  if (!fpv) return;
+  if (!joyVec.x && !joyVec.y) return;
+  const step = TRAVEL[travelIdx].mps * dt / 1000;       // 미터/초 → km
+  const sa = Math.sin(cam.az), ca = Math.cos(cam.az);
+  // 앞은 시선 쪽, 옆은 그 오른쪽
+  const f = -joyVec.y * step, r = joyVec.x * step;
+  cam.tx += -sa * f + ca * r;
+  cam.tz += -ca * f - sa * r;
+  applyCam();
+}
+
+function makeJoy() {
+  joyEl = document.createElement('div');
+  joyEl.id = 'joy';
+  joyKnob = document.createElement('i');
+  joyEl.appendChild(joyKnob);
+  document.body.appendChild(joyEl);
+
+  travelEl = document.createElement('div');
+  travelEl.id = 'travel';
+  travelEl.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-tv]');
+    if (!b) return;
+    travelIdx = +b.dataset.tv;
+    syncTravel();
+  });
+  document.body.appendChild(travelEl);
+
+  let id = null;
+  const R = 44;
+  const setKnob = (dx, dy) => {
+    const d = Math.hypot(dx, dy) || 1;
+    const k = Math.min(1, R / d);
+    const x = dx * k, y = dy * k;
+    joyKnob.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+    joyVec.x = x / R; joyVec.y = y / R;
+  };
+  joyEl.addEventListener('pointerdown', e => {
+    id = e.pointerId; joyEl.setPointerCapture(id);
+    const r = joyEl.getBoundingClientRect();
+    setKnob(e.clientX - (r.x + r.width / 2), e.clientY - (r.y + r.height / 2));
+    e.preventDefault();
+  });
+  joyEl.addEventListener('pointermove', e => {
+    if (e.pointerId !== id) return;
+    const r = joyEl.getBoundingClientRect();
+    setKnob(e.clientX - (r.x + r.width / 2), e.clientY - (r.y + r.height / 2));
+  });
+  const drop = e => {
+    if (e.pointerId !== id) return;
+    id = null; joyVec.x = 0; joyVec.y = 0;
+    joyKnob.style.transform = 'translate(0,0)';
+  };
+  joyEl.addEventListener('pointerup', drop);
+  joyEl.addEventListener('pointercancel', drop);
+
+  const st = document.createElement('style');
+  st.textContent =
+    '#joy{position:fixed;left:16px;bottom:96px;width:112px;height:112px;z-index:27;' +
+    'display:none;border-radius:56px;border:1px solid rgba(255,255,255,.2);' +
+    'background:rgba(20,20,24,.55);backdrop-filter:blur(10px);touch-action:none}' +
+    '#joy.on{display:block}' +
+    '#joy i{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;' +
+    'border-radius:22px;background:rgba(253,204,97,.92);box-shadow:0 2px 10px rgba(0,0,0,.45);' +
+    'pointer-events:none;transition:transform .05s linear}' +
+    '#travel{position:fixed;left:16px;bottom:52px;z-index:27;display:none;gap:2px;' +
+    'padding:3px;border-radius:19px;border:1px solid rgba(255,255,255,.18);' +
+    'background:rgba(20,20,24,.9)}' +
+    '#travel.on{display:flex}' +
+    '#travel button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
+    'font:700 12px/1 inherit;padding:0 10px;height:30px;border-radius:15px}' +
+    '#travel button.sel{background:#f2b64c;color:#231702}' +
+    '@media (max-width:560px){#joy{left:12px;bottom:92px;width:100px;height:100px}' +
+    '#travel{left:12px;bottom:50px}}';
+  document.head.appendChild(st);
+  syncTravel();
+}
+
+function syncTravel() {
+  if (!travelEl) return;
+  travelEl.className = fpv ? 'on' : '';
+  travelEl.innerHTML = TRAVEL.map((t, i) =>
+    '<button data-tv="' + i + '"' + (i === travelIdx ? ' class="sel"' : '') + '>' +
+    escapeHTML(L.cur === 'ko' ? t.ko : t.en) + '</button>').join('');
+  if (joyEl) joyEl.className = fpv ? 'on' : '';
+}
+
+function setFpv(on) {
+  fpv = on;
+  if (fpv) {
+    lookMode = false;
+    if (lookBtn) lookBtn.style.background = '';
+    cam.dist = 4;                       // 가까이 — 촘촘한 조각이 뜨도록
+    cam.el = 0.62;                      // 눈높이로 앞을 본다
+  } else {
+    cam.dist = 60;
+    cam.el = 0.9;
+  }
+  if (fpvBtn) fpvBtn.style.background = fpv ? 'rgba(253,204,97,.25)' : '';
+  syncTravel();
+  applyCam();
+}
+
 // ── 카메라 몰기 ───────────────────────────────────────────
 function applyCam() {
   cam.el = Math.max(0.12, Math.min(1.5, cam.el));
@@ -968,6 +1111,17 @@ function applyCam() {
   // 뭉개진 화면만 남는다 — 3 km 에서 멈춘다.
   cam.dist = Math.max(3.0, Math.min(4200, cam.dist));
   const y = groundAt(cam.tx, cam.tz);
+  if (fpv) {
+    // 그 자리에 서서 앞을 본다. cam.el 이 고개를 들고 내리는 몫을 한다.
+    const eye = y + eyeM * 0.001 * VEXAG;
+    camera.position.set(cam.tx, eye, cam.tz);
+    const pitch = 0.62 - cam.el;                    // 0.62 = 눈높이
+    camera.lookAt(cam.tx - Math.sin(cam.az) * 10,
+                  eye + Math.tan(Math.max(-1.2, Math.min(1.2, pitch))) * 10,
+                  cam.tz - Math.cos(cam.az) * 10);
+    syncFog(); updateDetail(); updateRegions(); updateHUD();
+    return;
+  }
   const r = cam.dist * Math.cos(cam.el);
   camera.position.set(cam.tx + r * Math.sin(cam.az), y + cam.dist * Math.sin(cam.el),
                       cam.tz + r * Math.cos(cam.az));
@@ -1046,7 +1200,7 @@ function bindControls() {
   // 화면 위에 얹힌 것들은 지도가 아니다. 여기에 빠뜨리면 그 위에서 누른
   // 손가락을 그림판이 가로채, 단추가 눌리지 않는다.
   const overUI = t => !!(t && t.closest &&
-    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn'));
+    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #joy, #travel, #bareBtn'));
 
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
   // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
@@ -1201,7 +1355,9 @@ const ICO = {
           '<circle cx="8" cy="8" r="2"/>',
   layers: '<path d="M2.2 4.3h11.6M2.2 8h11.6M2.2 11.7h11.6"/>',
   route:  '<path d="M3.2 13.4c0-3.5 3-3.5 3-6.2s-3-2.7-3-4.6"/>' +
-          '<path d="M6.6 2.6h6.3M10.9 1l2 1.6-2 1.6"/>'
+          '<path d="M6.6 2.6h6.3M10.9 1l2 1.6-2 1.6"/>',
+  eye2:   '<circle cx="8" cy="2.6" r="1.6"/>' +
+          '<path d="M8 4.6v4.2M8 8.8 5.6 14M8 8.8 10.4 14M4.6 6.2 8 5.4l3.4.8"/>'
 };
 function svgIco(d) {
   return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
@@ -1271,6 +1427,10 @@ function addViewButtons() {
     syncHyps();
   });
   hypsBtn.style.background = HYPS ? 'rgba(253,204,97,.25)' : '';
+
+  fpvBtn = mk(() => tag(svgIco(ICO.eye2), L.s('시점', 'On foot')),
+    () => L.s('땅에 내려서서 봅니다', 'Stand on the ground'), () => setFpv(!fpv));
+  makeJoy();
 
   // 관리용 암호로 들어왔을 때만 — 켜져 있는 등
   if (window.__ADMIN) makeLive();
@@ -1572,6 +1732,7 @@ function applyLang() {
   document.getElementById('homeBtn').innerHTML =
     '<i>' + svgIco(ICO.home) + '</i><u class="big">' + L.s('예루살렘', 'Jerusalem') + '</u>';
   syncToolLabels();
+  syncTravel();
   document.title = L.s('약속의 땅', 'The Promised Land');
   qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
                         'A place, a person, a word — or a whole line');
@@ -2316,7 +2477,7 @@ function buildPins() {
 // 앱은 지파·민족을 **색으로 칠한 땅**으로 보여 준다. 이름만 띄우면 어디부터
 // 어디까지인지 알 수가 없다. 경계 다각형과 색을 그대로 가져와 땅에 입힌다.
 let AREAS = { tribes: [], nations: [] };
-const areaMesh = { tribe: null, nation: null };
+const areaMesh = { tribe: null, nation: null, first: null, divided: null };
 
 function drapeArea(ring, color, opacity) {
   const tri = earClip(ring);
@@ -2341,16 +2502,17 @@ function drapeArea(ring, color, opacity) {
 }
 
 // 어느 지파·민족을 띄울지. 비어 있으면 그 갈래를 통째로 본다는 뜻이다.
-const areaSel = { tribe: new Set(), nation: new Set() };
+const AREAKIND = { tribe: 'tribes', nation: 'nations', first: 'first', divided: 'divided' };
+const AREARANK = { tribe: 5, nation: 6, first: 11, divided: 12 };
+const areaSel = { tribe: new Set(), nation: new Set(), first: new Set(), divided: new Set() };
 try {
   const sv = JSON.parse(localStorage.getItem('theland.areasel') || 'null');
-  if (sv) { (sv.tribe || []).forEach(n => areaSel.tribe.add(n));
-            (sv.nation || []).forEach(n => areaSel.nation.add(n)); }
+  if (sv) for (const k in areaSel) (sv[k] || []).forEach(n => areaSel[k].add(n));
 } catch (e) {}
 function saveAreaSel() {
   try {
-    localStorage.setItem('theland.areasel', JSON.stringify(
-      { tribe: [...areaSel.tribe], nation: [...areaSel.nation] }));
+    const o = {}; for (const k in areaSel) o[k] = [...areaSel[k]];
+    localStorage.setItem('theland.areasel', JSON.stringify(o));
   } catch (e) {}
 }
 function areaShown(kind, ko) {
@@ -2358,7 +2520,7 @@ function areaShown(kind, ko) {
 }
 
 function buildAreas(kind) {
-  const list = kind === 'tribe' ? AREAS.tribes : AREAS.nations;
+  const list = AREAS[AREAKIND[kind]] || [];
   const g = new THREE.Group();
   for (const a of list) {
     if (!a.poly || a.poly.length < 3) continue;
@@ -2372,7 +2534,7 @@ function buildAreas(kind) {
 }
 
 function syncAreas(force) {
-  for (const kind of ['tribe', 'nation']) {
+  for (const kind in AREAKIND) {
     const layer = LAYERS.find(l => l.k === kind);
     const want = !!(layer && layer.on);
     if (force && areaMesh[kind]) {
@@ -2733,8 +2895,10 @@ function toggleRoads() {
     // 땅을 촘촘히 따라가야 능선에서 파먹히지 않는다 (110 m 마디)
     const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 0.12);
     const wide = Math.max(0.30, cam.dist * 0.0013) * (r.rank === 0 ? 1.6 : 1);
+    // 산등성이가 길을 뚫고 올라와 길이 산 밑으로 파고든 것처럼 보였다.
+    // 길은 땅 위에 얹는 것이니 덮어 그린다.
     drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd9c8a4 : 0xc3b190, 0.012,
-              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 4, fade: true });
+              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 5, fade: true, through: true });
   }
   scene.add(roadsMesh);
   return true;
@@ -2838,7 +3002,7 @@ function addRivers() {
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
     drapeRuns(riverMesh, pts, Math.max(wide, dry ? 0.45 : 0.55),
               dry ? 0x4d87a6 : 0x2f6f95, 0.010,
-              { opacity: dry ? 0.55 : 0.8, order: 3, fade: true });
+              { opacity: dry ? 0.55 : 0.8, order: 4, fade: true, through: true });
   }
   // 가나안 바깥의 큰 강 — 나일·유프라테스·티그리스·오론테스·할리스…
   // 광역 지형은 화소가 커서 강바닥이 담기지 않는다. 그래서 애굽도
@@ -2989,14 +3153,14 @@ function openLayers() {
       '<u>' + n + escapeHTML(L.s('곳', '')) + '</u></b>' +
       escapeHTML(L.cur === 'ko' ? l.hintKo : l.hintEn) + '</span></div>';
     // 켜 둔 갈래마다 「얼마나 자세히」를 따로 고른다
-    if (l.on && l.k !== 'tribe' && l.k !== 'nation') {
+    if (l.on && !AREAKIND[l.k]) {
       row += '<div class="dpick" data-lay="' + l.k + '">' + DETAILS.map((d, i) =>
         '<button data-detail="' + i + '"' + (i === DET[l.k] ? ' class="sel"' : '') + '>' +
         escapeHTML(L.cur === 'ko' ? d.ko : d.en) + '</button>').join('') + '</div>';
     }
     // 지파·민족은 켜 두었을 때 낱낱이 고를 수 있다. 하나도 고르지 않으면 다 본다.
-    if ((l.k === 'tribe' || l.k === 'nation') && l.on) {
-      const list = l.k === 'tribe' ? AREAS.tribes : AREAS.nations;
+    if (AREAKIND[l.k] && l.on) {
+      const list = AREAS[AREAKIND[l.k]];
       if (list && list.length) {
         row += '<div class="chips">' +
           '<button class="chip' + (areaSel[l.k].size ? '' : ' sel') +
@@ -3258,10 +3422,11 @@ labSizeCSS.textContent =
   // 지파와 민족은 넓은 땅 이름 — 더 크고 옅게
   // 지파·민족 — 앱과 같이 색 판 위의 큰 흰 글씨. 넓은 땅의 이름이라
   // 성읍 이름보다 커야 한다.
-  '.lab.r5,.lab.r6{font-size:22px;font-weight:800;letter-spacing:.15em;color:#fff;' +
+  '.lab.r5,.lab.r6,.lab.r11,.lab.r12{font-size:22px;font-weight:800;' +
+  'letter-spacing:.15em;color:#fff;' +
   'padding:5px 15px;border-radius:17px;border:2px solid rgba(255,255,255,.55);' +
   'text-shadow:0 2px 5px rgba(0,0,0,.6);box-shadow:0 3px 12px rgba(0,0,0,.42)}' +
-  '@media (max-width:560px){.lab.r5,.lab.r6{font-size:18px;padding:4px 12px}}' +
+  '@media (max-width:560px){.lab.r5,.lab.r6,.lab.r11,.lab.r12{font-size:18px;padding:4px 12px}}' +
   '.lab.r7{font-size:16px;font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
   // 도피 도시 — 붉은 세모 (여호수아 20장의 여섯 성)
   '.lab.refuge i{width:0;height:0;border-radius:0;background:none;' +
@@ -3313,7 +3478,8 @@ function makeBareBtn() {
     'border-radius:12px;border:1px solid var(--line);background:var(--panel);' +
     'color:var(--ink);font:16px/1 inherit;cursor:pointer;' +
     'backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}' +
-    'body.bare #top,body.bare #dock,body.bare #panel,body.bare .toast{display:none}' +
+    'body.bare #top,body.bare #dock,body.bare #panel,body.bare .toast,' +
+    'body.bare #joy,body.bare #travel{display:none}' +
     '@media (max-width:560px){#bareBtn{right:10px;bottom:10px}}';
   document.head.appendChild(st);
 }
@@ -3350,9 +3516,12 @@ routeCSS.textContent =
 document.head.appendChild(routeCSS);
 
 // ── 돌리기 ────────────────────────────────────────────────
+let fpvT = 0;
 function tick() {
   requestAnimationFrame(tick);
   stepKeys();
+  if (fpv) { const n = performance.now(); stepFpv(fpvT ? Math.min(120, n - fpvT) : 16); fpvT = n; }
+  else fpvT = 0;
   if (following) stepFollow();
   renderer.render(scene, camera);
   updateLabels();
