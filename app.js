@@ -453,9 +453,12 @@ function updateDetail() {
   const w = Math.min(tx1, cam.tx + half) - x, d = Math.min(tz1, cam.tz + half) - z;
   if (w < 2 || d < 2) { dropDetail(); return; }   // 타일 밖이면 그만둔다
 
-  // 그림이 가진 것보다 촘촘히 뜰 까닭은 없다 — 110 m 칸이 한계다
-  const segX = Math.min(760, Math.max(80, Math.round(w * 1000 / 110)));
-  const segZ = Math.min(760, Math.max(80, Math.round(d * 1000 / 110)));
+  // 그림이 가진 것보다 촘촘히 뜰 까닭은 없다. 칸 크기는 **그림에게 묻는다** —
+  // 더 촘촘한 지형을 구워 올리면 조각도 저절로 그만큼 촘촘해진다.
+  const iw = (canaanTex.image && canaanTex.image.width) || t.w;
+  const step = Math.max(25, (t.lonMax - t.lonMin) * 94600 / Math.max(iw - 1, 1));
+  const segX = Math.min(1100, Math.max(80, Math.round(w * 1000 / step)));
+  const segZ = Math.min(1100, Math.max(80, Math.round(d * 1000 / step)));
 
   if (detailMesh) { scene.remove(detailMesh); detailMesh.geometry.dispose(); detailMesh.material.dispose(); }
   detailMesh = makeTerrain(t, segX, segZ, canaanTex, null, { x, z, w, d });
