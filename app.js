@@ -58,7 +58,9 @@ let byPlace = new Map();          // 지명 → 사건들
 let siteByName = new Map();
 
 async function loadJSON(p) {
-  const r = await fetch(p, { cache: 'force-cache' });
+  // 'force-cache' 였다. 그러면 한 번 받은 것을 **영영** 다시 안 받는다 —
+  // terrain.json 을 고쳐 올려도 브라우저가 옛 것을 계속 물고 있었다.
+  const r = await fetch(p, { cache: 'default' });
   if (!r.ok) throw new Error(p + ' → ' + r.status);
   return r.json();
 }
@@ -383,9 +385,14 @@ function panBy(dx, dy, dist) {
   cam.tz += dx * k * sa - dy * kz * ca;
 }
 
+/** 그 곳으로 옮겨 간다.
+ *
+ *  **높이는 건드리지 않는다.** 예전에는 누를 때마다 26~90 km 로 확 당겨서,
+ *  멀리서 내려다보다가 이름 하나 눌렀을 뿐인데 화면이 통째로 뒤집혔다.
+ *  보는 높이는 보는 사람이 정한다. (dist 를 딱 집어 준 때만 따른다) */
 function flyTo(s, dist) {
   cam.tx = s.x; cam.tz = s.z;
-  cam.dist = dist || (s.rank <= 1 ? 26 : s.rank <= 3 ? 40 : 90);
+  if (dist) cam.dist = dist;
   highlight = s.ko;
   applyCam();
 }
