@@ -74,6 +74,67 @@ try {
   else { QUAL = autoQual(); qualAuto = true; }
 } catch (e) { QUAL = 'mid'; }
 
+/** 지형 판 하나의 그림을 갈아 끼운다 — 칸 수도 그림에게 다시 묻는다 */
+function swapTexture(mesh, tile, tex) {
+  if (!mesh) return;
+  const u = mesh.material.uniforms;
+  const iw = tex.image.width, ih = tex.image.height;
+  u.hmap.value = tex;
+  u.texel.value.set(1 / iw, 1 / ih);
+  u.mpp.value.set((tile.lonMax - tile.lonMin) * KM_LON * 1000 / Math.max(iw - 1, 1),
+                  (tile.latMax - tile.latMin) * KM_LAT * 1000 / Math.max(ih - 1, 1));
+}
+
+/** 보던 자리 그대로 화질만 올리고 내린다 */
+async function setQual(q) {
+  if (q === QUAL || qualBusy) return;
+  qualBusy = true;
+  try { localStorage.setItem('theland.qual', q); } catch (e) {}
+  const old = QUAL;
+  QUAL = q;
+  if (qualBtn) qualBtn.textContent = QUAL_NAME()[q];
+  toast(L.s('지형을 ' + QUAL_NAME()[q] + ' 화질로 바꾸는 중…',
+            'Switching terrain to ' + QUAL_NAME()[q] + '…'));
+  try {
+    const [ca, re] = TERRAIN.tiles;
+    const texC = await loadTexture(qualFile(ca.file)).catch(() => loadTexture(ca.file));
+    swapTexture(baseCanaan, ca, texC);
+    canaanTex = texC; hTexA = texC;
+    if (worldMesh) {
+      const texR = await loadTexture(qualFile(re.file)).catch(() => loadTexture(re.file));
+      swapTexture(worldMesh, re, texR);
+      hTexB = texR;
+    }
+    for (const [file, m] of regionLoaded) {
+      if (!m || m === 'loading') continue;
+      const t = REGIONS.find(x => x.file === file);
+      if (!t) continue;
+      const tx = await loadTexture(qualFile(t.file)).catch(() => loadTexture(t.file));
+      swapTexture(m, t, tx);
+    }
+    // 길·강이 쓰는 재질도 같은 그림을 보게 한다
+    for (const mt of drapeMats) {
+      if (mt.uniforms.hA) mt.uniforms.hA.value = hTexA;
+      if (mt.uniforms.hB) mt.uniforms.hB.value = hTexB || hTexA;
+    }
+    dropDetail();
+    GRIDS.length = 0;
+    buildGrid(ca, texC.image, 1500, 1700);
+    placeSites();
+    applyCam();
+    toast(L.s('화질 ' + QUAL_NAME()[q], 'Detail: ' + QUAL_NAME()[q]));
+  } catch (e) {
+    QUAL = old;
+    if (qualBtn) qualBtn.textContent = QUAL_NAME()[old];
+    toast(L.s('그 화질의 지형이 아직 없습니다', 'That level is not available yet'));
+  }
+  qualBusy = false;
+}
+let qualBusy = false, qualBtn = null;
+function QUAL_NAME() {
+  return { low: L.s('하', 'Low'), mid: L.s('중', 'Mid'), hi: L.s('상', 'High') };
+}
+
 /** 화질에 맞는 그림 이름 — 상은 본이름 그대로 */
 function qualFile(f) {
   return QUAL === 'hi' ? f : f.replace(/\.png$/, '_' + QUAL + '.png');
@@ -580,12 +641,19 @@ function labelCap() { return innerWidth < 560 ? 44 : 110; }
 // 지파도 민족도 지형도 한꺼번에 띄우면 지도가 아니라 낱말 더미가 된다.
 // 갈래를 골라 볼 수 있게 한다. 처음에는 성읍·지형·물길만 켜 둔다.
 const LAYERS = [
-  { k: 'city',   ko: '성읍',  en: 'Towns',   ranks: [0, 1, 2, 3], on: true },
-  { k: 'land',   ko: '지형',  en: 'Land',    ranks: [4, 8, 9],    on: true },
-  { k: 'water',  ko: '물길',  en: 'Water',   ranks: [7],          on: true },
-  { k: 'tribe',  ko: '지파',  en: 'Tribes',  ranks: [5],          on: false },
-  { k: 'nation', ko: '민족',  en: 'Nations', ranks: [6],          on: false },
-  { k: 'inner',  ko: '성 안', en: 'Inside',  ranks: [10],         on: true }
+  { k: 'city',   ko: '성읍',  en: 'Towns',   ranks: [0, 1, 2, 3], on: true,
+    hintKo: '도시와 마을의 이름', hintEn: 'Names of towns and villages' },
+  { k: 'land',   ko: '지형',  en: 'Landforms', ranks: [4, 8, 9], on: true,
+    hintKo: '산 · 산맥 · 골짜기 · 들 · 광야', hintEn: 'Mountains, valleys, plains, wilderness' },
+  { k: 'water',  ko: '물길',  en: 'Waters',  ranks: [7],          on: true,
+    hintKo: '강과 급류 골짜기의 이름', hintEn: 'Rivers and torrent valleys' },
+  { k: 'tribe',  ko: '지파',  en: 'Tribes',  ranks: [5],          on: false,
+    hintKo: '이스라엘 열두 지파가 받은 땅', hintEn: 'The lands of the twelve tribes' },
+  { k: 'nation', ko: '민족',  en: 'Nations', ranks: [6],          on: false,
+    hintKo: '둘레에 살던 민족들의 땅', hintEn: 'The lands of the surrounding nations' },
+  { k: 'inner',  ko: '성 안', en: 'Inside a city', ranks: [10],   on: true,
+    hintKo: '예루살렘·로마 등 성 안의 자리 (가까이 가야 보입니다)',
+    hintEn: 'Places inside Jerusalem, Rome … (only up close)' }
 ];
 try {
   const saved = JSON.parse(localStorage.getItem('theland.layers') || 'null');
@@ -850,13 +918,11 @@ function addViewButtons() {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
-  const qName = { low: L.s('하', 'Low'), mid: L.s('중', 'Mid'), hi: L.s('상', 'High') };
-  const qBtn = mk(qName[QUAL], L.s('화질 — 누르면 상·중·하로 돕니다', 'Detail'), () => {
-    const nx = QUALS[(QUALS.indexOf(QUAL) + 1) % 3];
-    try { localStorage.setItem('theland.qual', nx); } catch (e) {}
-    location.reload();
+  qualBtn = mk(QUAL_NAME()[QUAL], L.s('화질 — 누르면 하·중·상으로 돕니다', 'Detail'), () => {
+    // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
+    setQual(QUALS[(QUALS.indexOf(QUAL) + 1) % 3]);
   });
-  qBtn.style.fontWeight = '700';
+  qualBtn.style.fontWeight = '700';
 
   // 데이터로 들어온 듯하면 한 번만 알려 준다
   if (qualAuto && QUAL === 'low') toast(L.s(
@@ -1192,6 +1258,7 @@ function makeRibbon(pts, widthKm, color, lift, opt) {
 // 땅이 아무리 촘촘해져도 길은 늘 그 위에 앉는다. 가장자리는 투명하게
 // 스러지게 해서 띠가 아니라 실로 보이게 한다.
 let hTexA = null, hTexB = null, hBoundA = null, hBoundB = null;
+const drapeMats = [];      // 길·강이 쓰는 재질 — 지형 그림이 바뀌면 함께 간다
 
 function tileBounds(t) {
   const x0 = worldX(t.lonMin), z0 = worldZ(t.latMax);
@@ -1268,8 +1335,9 @@ function drapeLine(pts, widthKm, color, lift, opt) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
   g.setIndex(idx);
-  const m = new THREE.Mesh(g, drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8,
-                                            lift, opt.through));
+  const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift, opt.through);
+  drapeMats.push(mat);
+  const m = new THREE.Mesh(g, mat);
   m.renderOrder = opt.order || 5;
   m.frustumCulled = false;
   return m;
@@ -1417,7 +1485,9 @@ function chevronRibbon(pts, widthKm, lift) {
   g.setAttribute('uv2', new THREE.Float32BufferAttribute(uv2, 2));
   g.setIndex(idx);
   // 앱과 같은 되풀이 간격 — 너비의 2.4 배마다 갈매기표 두 개
-  const m = new THREE.Mesh(g, chevronMaterial(lift, Math.max(widthKm * 2.4, 1e-4)));
+  const cmat = chevronMaterial(lift, Math.max(widthKm * 2.4, 1e-4));
+  drapeMats.push(cmat);
+  const m = new THREE.Mesh(g, cmat);
   m.renderOrder = 7;
   m.frustumCulled = false;
   return m;
@@ -1796,6 +1866,11 @@ function showCard(s) {
     cardEl.addEventListener('click', ev => {
       const slot = ev.target.dataset.slot;
       if (slot) { assign(cardSite, slot); return; }
+      if (ev.target.id === 'cMinus') {
+        unassign(cardSite); setRoute(planStops()); showCard(cardSite);
+        if (panelIsRoutes) openRoutes();
+        return;
+      }
       if (ev.target.id === 'cX') { cardEl.classList.remove('on'); highlight = null; return; }
       if (ev.target.closest('#cName')) openPlace(cardSite);
     });
@@ -1812,6 +1887,8 @@ function showCard(s) {
     (eps ? ' · <b>' + L.s('사건 ' + eps, eps + ' records') + '</b>' : '') + '</small></div>' +
     '<span class="cgap"></span>' +
     pill('start', L.s('출발', 'Start')) + pill('via', L.s('경유', 'Via')) + pill('end', L.s('도착', 'End')) +
+    // 이미 길에 든 곳이면 그 자리에서 뺄 수 있어야 한다 (앱과 같다)
+    (here ? '<button id="cMinus" title="' + L.s('길에서 빼기', 'Remove from route') + '">⊖</button>' : '') +
     '<button id="cX">✕</button>';
   cardEl.classList.add('on');
 }
@@ -1833,9 +1910,10 @@ cardCSS.textContent =
   '.cslot{border:0;font:600 12px/1 inherit;color:rgba(255,255,255,.9);cursor:pointer;' +
   'padding:0 12px;height:30px;border-radius:15px;background:rgba(255,255,255,.14)}' +
   '.cslot.on{background:#f5e6c2;color:rgba(0,0,0,.85)}' +
-  '#cX{border:0;background:none;color:rgba(255,255,255,.6);font:14px/1 inherit;' +
+  '#cX,#cMinus{border:0;background:none;color:rgba(255,255,255,.6);font:14px/1 inherit;' +
   'cursor:pointer;width:26px;height:26px;border-radius:13px}' +
-  '#cX:hover{background:rgba(255,255,255,.1)}' +
+  '#cX:hover,#cMinus:hover{background:rgba(255,255,255,.1)}' +
+  '#cMinus{color:#ff8f70;font-size:17px}' +
   '@media (max-width:560px){#card{left:8px;right:8px;transform:translateY(120%);max-width:none;width:auto}' +
   '#card.on{transform:none}.cslot{padding:0 9px}}';
 document.head.appendChild(cardCSS);
@@ -1843,12 +1921,20 @@ document.head.appendChild(cardCSS);
 // ── 경로 판 ───────────────────────────────────────────────
 function openLayers() {
   panelIsRoutes = false;
-  document.getElementById('pTitle').textContent = L.s('무엇을 띄울까', 'What to show');
-  document.getElementById('pSub').textContent = L.s('갈래를 골라 봅니다', 'Choose the layers');
-  document.getElementById('pb').innerHTML =
-    '<div class="note">' + LAYERS.map(l =>
-      '<div class="lrow" data-layer="' + l.k + '"><i>' + (l.on ? '●' : '○') + '</i>' +
-      escapeHTML(L.cur === 'ko' ? l.ko : l.en) + '</div>').join('') + '</div>';
+  document.getElementById('pTitle').textContent = L.s('표시', 'Display');
+  document.getElementById('pSub').textContent =
+    L.s('지도에 어떤 이름을 띄울지 고릅니다', 'Choose which names the map shows');
+  // 갈래마다 지금 지도에 몇 곳이 걸려 있는지도 함께 적어 준다
+  const cnt = {};
+  for (const s of SITES) cnt[s.rank] = (cnt[s.rank] || 0) + 1;
+  document.getElementById('pb').innerHTML = LAYERS.map(l => {
+    const n = l.ranks.reduce((a, r2) => a + (cnt[r2] || 0), 0);
+    return '<div class="lrow' + (l.on ? ' on' : '') + '" data-layer="' + l.k + '">' +
+      '<i>' + (l.on ? '●' : '○') + '</i>' +
+      '<span><b>' + escapeHTML(L.cur === 'ko' ? l.ko : l.en) +
+      '<u>' + n + escapeHTML(L.s('곳', '')) + '</u></b>' +
+      escapeHTML(L.cur === 'ko' ? l.hintKo : l.hintEn) + '</span></div>';
+  }).join('');
   panel.classList.add('open');
 }
 
@@ -1960,9 +2046,14 @@ routeCSS.textContent =
   '.rstop span{color:#8d867a;padding:0 4px}' +
   '.rstop span:hover{color:#ff9d86}' +
   '.jrn{cursor:pointer} .jrn:hover h3{color:var(--gold)}' +
-  '.lrow{padding:9px 0;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:9px}' +
-  '.lrow i{font-style:normal;color:var(--gold);font-size:12px;width:12px}' +
-  '.lrow:hover{color:var(--gold)}' +
+  '.lrow{padding:11px 2px;cursor:pointer;display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid rgba(255,255,255,.07)}' +
+  '.lrow i{font-style:normal;color:rgba(255,255,255,.3);font-size:13px;width:13px;padding-top:1px}' +
+  '.lrow.on i{color:var(--gold)}' +
+  '.lrow span{display:flex;flex-direction:column;gap:2px;font:400 12px/1.4 inherit;color:rgba(255,255,255,.5)}' +
+  '.lrow b{font:600 14px/1.3 inherit;color:rgba(255,255,255,.55);display:flex;align-items:baseline;gap:7px}' +
+  '.lrow.on b{color:var(--ink)}' +
+  '.lrow u{text-decoration:none;font:400 11px/1 ui-monospace,monospace;color:#8d867a}' +
+  '.lrow:hover b{color:var(--gold)}' +
   '.hit.sentence{background:rgba(253,204,97,.10)}' +
   '.hit.sentence b{color:var(--gold)}';
 document.head.appendChild(routeCSS);
