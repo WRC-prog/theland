@@ -109,6 +109,67 @@ function worldZ(lat) { return -(lat - ORIGIN.lat) * KM_LAT; }
 function lonOfX(x) { return ORIGIN.lon + x / KM_LON; }
 function latOfZ(z) { return ORIGIN.lat - z / KM_LAT; }
 
+// ── 땅 높이 읽기 ──────────────────────────────────────────
+//
+// 이름표를 **땅 위에** 얹으려면 그 자리의 높이를 알아야 한다. 예전에는 다
+// 0 으로 두었는데, 높이를 네 배로 부풀려 그리므로 예루살렘(750 m)의 이름표가
+// 실제 산꼭대기보다 3 km 아래에 찍혔다. 기울일수록 이름이 엉뚱한 데로 밀렸다.
+//
+// 그림을 다시 받아 오지 않는다 — 지형에 쓴 그림을 그대로 한 번 훑는다.
+// 눈금은 **지형 판의 꼭짓점과 같은 간격**으로 잡는다. 그래야 이름표가
+// 눈에 보이는 면에 딱 붙는다 (더 촘촘히 읽으면 오히려 면에서 떠 버린다).
+const GRIDS = [];
+
+function buildGrid(tile, img, segX, segZ) {
+  try { buildGridUnsafe(tile, img, segX, segZ); }
+  catch (e) { console.warn('높이를 읽지 못했습니다 — 이름표는 바다 높이에 놓입니다', e); }
+}
+
+function buildGridUnsafe(tile, img, segX, segZ) {
+  const cv = document.createElement('canvas');
+  cv.width = img.width; cv.height = img.height;
+  const g2 = cv.getContext('2d', { willReadFrequently: true });
+  g2.drawImage(img, 0, 0);
+  const px = g2.getImageData(0, 0, img.width, img.height).data;
+  const gw = segX + 1, gh = segZ + 1;
+  const m = new Int16Array(gw * gh);
+  for (let j = 0; j < gh; j++) {
+    const iy = Math.round(j / segZ * (img.height - 1));   // j=0 이 북쪽(그림 맨 윗줄)
+    for (let i = 0; i < gw; i++) {
+      const ix = Math.round(i / segX * (img.width - 1));
+      const p = (iy * img.width + ix) * 4;
+      m[j * gw + i] = px[p] * 256 + px[p + 1] - 6000;
+    }
+  }
+  cv.width = cv.height = 1;                                // 40 MB 짜리 자리를 바로 돌려준다
+  GRIDS.push({ t: tile, gw, gh, m });
+}
+
+function gridAt(G, lat, lon) {
+  const t = G.t;
+  const u = (lon - t.lonMin) / (t.lonMax - t.lonMin);
+  const v = (t.latMax - lat) / (t.latMax - t.latMin);
+  if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+  const fx = u * (G.gw - 1), fy = v * (G.gh - 1);
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const x1 = Math.min(x0 + 1, G.gw - 1), y1 = Math.min(y0 + 1, G.gh - 1);
+  const tx = fx - x0, ty = fy - y0;
+  const a = G.m[y0 * G.gw + x0], b = G.m[y0 * G.gw + x1];
+  const c = G.m[y1 * G.gw + x0], d = G.m[y1 * G.gw + x1];
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+/** 그 자리의 땅 높이 (화면 단위 = km, 과장까지 먹인 값) */
+function groundY(lat, lon) {
+  for (const G of GRIDS) { const h = gridAt(G, lat, lon); if (h !== null) return h * 0.001 * VEXAG; }
+  return 0;
+}
+
+/** 지명마다 높이를 다시 매긴다 (지형이 하나 더 붙을 때마다 부른다) */
+function placeSites() {
+  for (const s of SITES) { s.x = worldX(s.lon); s.y = groundY(s.lat, s.lon); s.z = worldZ(s.lat); }
+}
+
 // ── 그림 판 ───────────────────────────────────────────────
 let renderer, scene, camera, labelRoot;
 const cam = { tx: 0, tz: 0, dist: 260, az: 0.35, el: 0.62 };   // 도는 카메라
@@ -134,7 +195,7 @@ function initGL() {
 }
 
 /** 높이 그림 한 장을 지형 판으로 세운다 */
-function makeTerrain(tile, segX, segZ, tex) {
+function makeTerrain(tile, segX, segZ, tex, clip) {
   const x0 = worldX(tile.lonMin), x1 = worldX(tile.lonMax);
   const z0 = worldZ(tile.latMax), z1 = worldZ(tile.latMin);   // 위도는 뒤집힌다
   const w = x1 - x0, d = z1 - z0;
@@ -151,7 +212,9 @@ function makeTerrain(tile, segX, segZ, tex) {
       vex: { value: VEXAG },
       sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
       fogCol: { value: new THREE.Color(0x0b0d10) },
-      fogDen: { value: 0.0009 }
+      fogDen: { value: 0.0009 },
+      // 비워 둘 네모 (x0,z0,x1,z1). 뒤집힌 값이면 아무 데도 비우지 않는다.
+      clip: { value: clip || new THREE.Vector4(0, 0, -1, -1) }
     },
     vertexShader: `
       uniform sampler2D hmap;
@@ -178,6 +241,7 @@ function makeTerrain(tile, segX, segZ, tex) {
       uniform vec3 sun;
       uniform vec3 fogCol;
       uniform float fogDen;
+      uniform vec4 clip;
       varying vec2 vUv;
       varying float vH;
       varying vec3 vWorld;
@@ -195,6 +259,9 @@ function makeTerrain(tile, segX, segZ, tex) {
         return mix(vec3(0.52,0.44,0.40), vec3(0.88,0.89,0.92), clamp((h-1600.0)/900.0,0.0,1.0));
       }
       void main(){
+        // 가나안 판이 맡은 자리는 넘기고 그리지 않는다 — 겹치면 서로 파고든다
+        if (vWorld.x > clip.x && vWorld.x < clip.z &&
+            vWorld.z > clip.y && vWorld.z < clip.w) discard;
         float hl = height(vUv - vec2(texel.x, 0.0));
         float hr = height(vUv + vec2(texel.x, 0.0));
         float hu = height(vUv - vec2(0.0, texel.y));
@@ -295,13 +362,24 @@ function applyCam() {
   const r = cam.dist * Math.cos(cam.el);
   camera.position.set(cam.tx + r * Math.sin(cam.az), y + cam.dist * Math.sin(cam.el),
                       cam.tz + r * Math.cos(cam.az));
+  // 낮게 기울였을 때 카메라가 산 속으로 들어가 화면이 캄캄해지던 것을 막는다
+  const gy = groundAt(camera.position.x, camera.position.z);
+  if (camera.position.y < gy + 0.6) camera.position.y = gy + 0.6;
   camera.lookAt(cam.tx, y, cam.tz);
   updateHUD();
 }
 
-/** 지금 자리의 땅 높이 (km). 가진 것이 그림뿐이라 대충 0 으로 둔다 —
- *  카메라가 지형을 뚫지 않을 만큼만 있으면 된다. */
-function groundAt() { return 0; }
+function groundAt(x, z) { return groundY(latOfZ(z), lonOfX(x)); }
+
+/** 화면에서 끈 만큼 땅이 따라오게 — 눈금은 거리와 기울기에서 나온다 */
+function panBy(dx, dy, dist) {
+  const d = dist || cam.dist;
+  const k = 2 * d * Math.tan(camera.fov * Math.PI / 360) / Math.max(innerHeight, 1);
+  const kz = k / Math.max(Math.sin(cam.el), 0.22);   // 낮게 볼수록 위아래로 더 멀다
+  const sa = Math.sin(cam.az), ca = Math.cos(cam.az);
+  cam.tx -= dx * k * ca + dy * kz * sa;
+  cam.tz += dx * k * sa - dy * kz * ca;
+}
 
 function flyTo(s, dist) {
   cam.tx = s.x; cam.tz = s.z;
@@ -312,52 +390,114 @@ function flyTo(s, dist) {
 
 function bindControls() {
   const el = renderer.domElement;
-  let drag = null, pinch = null;
+  const pts = new Map();                 // 지금 눌려 있는 손가락·단추
+  let mode = null, last = null, twoD = 0, twoMid = null;
+
+  // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
+  // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
+  const orbitish = e => e.button === 2 || e.button === 1
+    || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
+
   el.addEventListener('pointerdown', e => {
-    el.setPointerCapture(e.pointerId);
-    drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey };
-  });
-  el.addEventListener('pointermove', e => {
-    if (!drag) return;
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    drag.x = e.clientX; drag.y = e.clientY;
-    if (drag.pan) {
-      const k = cam.dist * 0.0016;
-      cam.tx -= (dx * Math.cos(cam.az) - dy * Math.sin(cam.az)) * k;
-      cam.tz += (dx * Math.sin(cam.az) + dy * Math.cos(cam.az)) * k;
-    } else {
-      cam.az -= dx * 0.005;
-      cam.el += dy * 0.005;
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) {
+      mode = orbitish(e) ? 'orbit' : 'pan';
+      last = { x: e.clientX, y: e.clientY };
+    } else if (pts.size === 2) {
+      const v = [...pts.values()];
+      mode = 'two';
+      twoD = Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
+      twoMid = { x: (v[0].x + v[1].x) / 2, y: (v[0].y + v[1].y) / 2 };
     }
+  });
+
+  el.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (mode === 'two' && pts.size >= 2) {
+      const v = [...pts.values()];
+      const d = Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
+      const mid = { x: (v[0].x + v[1].x) / 2, y: (v[0].y + v[1].y) / 2 };
+      if (twoD > 0 && d > 0) cam.dist *= twoD / d;          // 오므리면 다가간다
+      cam.az -= (mid.x - twoMid.x) * 0.006;                 // 함께 옆으로 = 돌리기
+      cam.el += (mid.y - twoMid.y) * 0.006;                 // 함께 위아래 = 기울이기
+      twoD = d; twoMid = mid;
+      applyCam();
+      return;
+    }
+    if (!last || !mode) return;
+    const dx = e.clientX - last.x, dy = e.clientY - last.y;
+    last = { x: e.clientX, y: e.clientY };
+    if (mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
+    else                  { panBy(dx, dy); }
     applyCam();
   });
-  const end = e => { drag = null; try { el.releasePointerCapture(e.pointerId); } catch (_) {} };
+
+  const end = e => {
+    pts.delete(e.pointerId);
+    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (pts.size === 1) {
+      const v = [...pts.values()][0];
+      mode = 'pan'; last = { x: v.x, y: v.y };
+    } else if (pts.size === 0) { mode = null; last = null; }
+  };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
+  el.addEventListener('pointerleave', end);
   el.addEventListener('contextmenu', e => e.preventDefault());
+
+  // 바퀴 — 화살표가 가리키는 곳으로 다가간다
   el.addEventListener('wheel', e => {
     e.preventDefault();
-    cam.dist *= Math.exp(e.deltaY * 0.0012);
-    applyCam();
+    zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY);
   }, { passive: false });
 
-  // 손가락 둘 — 오므리면 다가간다
-  el.addEventListener('touchstart', e => {
-    if (e.touches.length === 2) {
-      pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                         e.touches[0].clientY - e.touches[1].clientY);
-      drag = null;
-    }
-  }, { passive: true });
-  el.addEventListener('touchmove', e => {
-    if (e.touches.length === 2 && pinch) {
-      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                           e.touches[0].clientY - e.touches[1].clientY);
-      cam.dist *= pinch / Math.max(d, 1);
-      pinch = d; applyCam();
-    }
-  }, { passive: true });
-  el.addEventListener('touchend', () => { pinch = null; }, { passive: true });
+  // 자판으로도 — 화살표로 옮기고, +/- 로 다가가고, [ ] 로 기울인다
+  addEventListener('keydown', e => {
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+    const step = 60;
+    if (e.key === 'ArrowLeft')       panBy(step, 0);
+    else if (e.key === 'ArrowRight') panBy(-step, 0);
+    else if (e.key === 'ArrowUp')    panBy(0, step);
+    else if (e.key === 'ArrowDown')  panBy(0, -step);
+    else if (e.key === '+' || e.key === '=') cam.dist *= 0.8;
+    else if (e.key === '-' || e.key === '_') cam.dist *= 1.25;
+    else if (e.key === '[')          cam.el -= 0.12;
+    else if (e.key === ']')          cam.el += 0.12;
+    else return;
+    e.preventDefault();
+    applyCam();
+  });
+}
+
+/** 화면의 한 점을 붙든 채 다가가거나 물러선다 */
+function zoomAt(f, cx, cy) {
+  const before = cam.dist;
+  cam.dist = Math.max(1.5, Math.min(4200, cam.dist * f));
+  const moved = 1 - cam.dist / before;
+  if (Math.abs(moved) > 1e-4 && cx != null) {
+    panBy(-(cx - innerWidth / 2) * moved, -(cy - innerHeight / 2) * moved, before);
+  }
+  applyCam();
+}
+
+/** 화면 위 단추 — 마우스가 없는 화면에서도 다가가고 기울일 수 있게 */
+function addViewButtons() {
+  const tools = document.getElementById('tools');
+  const mk = (label, title, fn) => {
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = label; b.title = title;
+    b.addEventListener('click', fn);
+    tools.insertBefore(b, tools.firstChild);
+    return b;
+  };
+  // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로)
+  mk('⌄', L.s('눕히기', 'Lower the view'),  () => { cam.el -= 0.16; applyCam(); });
+  mk('⌃', L.s('세우기', 'Raise the view'),  () => { cam.el += 0.16; applyCam(); });
+  mk('−', L.s('물러서기', 'Zoom out'),      () => zoomAt(1.35));
+  mk('＋', L.s('다가가기', 'Zoom in'),       () => zoomAt(1 / 1.35));
 }
 
 function updateHUD() {
@@ -479,14 +619,17 @@ function tick() {
     say(L.s('지형을 세우는 중…', 'Raising the land…'), 35);
     const [canaan, region] = TERRAIN.tiles;
 
-    // 지명마다 미리 세계 좌표를 매겨 둔다 (높이는 그림에서 읽을 수 없으므로 0)
-    for (const s of SITES) { s.x = worldX(s.lon); s.y = 0; s.z = worldZ(s.lat); }
+    placeSites();                       // 높이는 아직 0 — 지형을 읽고 다시 매긴다
 
     const texC = await loadTexture(canaan.file);
     say(L.s('가나안 지형', 'Canaan terrain'), 65);
     scene.add(makeTerrain(canaan, 600, 680, texC));
+    const canaanClip = new THREE.Vector4(
+      worldX(canaan.lonMin), worldZ(canaan.latMax),
+      worldX(canaan.lonMax), worldZ(canaan.latMin));
 
     bindControls();
+    addViewButtons();
     applyLang();
     const jer = siteByName.get('예루살렘');
     if (jer) { cam.tx = jer.x; cam.tz = jer.z; }
@@ -494,13 +637,27 @@ function tick() {
     tick();
     boot.style.display = 'none';
 
-    // 넓은 세계는 뒤에서 몰래 받아 온다
-    loadTexture(region.file).then(texR => {
-      const m = makeTerrain(region, 420, 240, texR);
-      m.position.y = -0.35;                 // 가나안 판 밑으로 살짝
-      m.renderOrder = -1;
-      scene.add(m);
-    }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
+    // 높이 읽기와 넓은 세계는 **지도를 띄운 뒤에** 한다.
+    //
+    // 높이 그림 한 장을 훑는 데 3 초쯤 걸린다(1,020만 칸). 그동안 화면이
+    // 얼어붙으면 고장 난 줄 안다. 그래서 지도를 먼저 보여 주고, 이름표는
+    // 잠깐 뒤에 땅 위로 내려앉는다.
+    setTimeout(() => {
+      buildGrid(canaan, texC.image, 600, 680);
+      placeSites();
+      applyCam();
+
+      loadTexture(region.file).then(texR => {
+        const m = makeTerrain(region, 420, 240, texR, canaanClip);
+        m.renderOrder = -1;
+        scene.add(m);
+        setTimeout(() => {
+          buildGrid(region, texR.image, 420, 240);
+          placeSites();                 // 가나안 밖 지명도 땅 위로 올라온다
+          applyCam();
+        }, 40);
+      }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
+    }, 80);
 
   } catch (e) {
     die(L.s('여는 중에 막혔습니다', 'Could not open'), e);
