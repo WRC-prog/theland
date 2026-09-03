@@ -80,6 +80,20 @@
   .note{color:#cfc8ba;font-size:13px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.07)}
   .note em{display:block;color:var(--gold);font-style:normal;font-size:11.5px;margin-bottom:4px}
 
+  /* 암호 — 자물쇠가 아니라 커튼이다 */
+  #gate{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;background:#0b0d10;padding:24px}
+  #gate h1{font:600 22px/1.3 inherit;margin:0;letter-spacing:.02em}
+  #gate p{margin:0;color:var(--dim);font-size:12.5px}
+  #gateForm{display:flex;gap:8px;align-items:center}
+  #pw{background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:10px;
+    color:var(--ink);font:16px/1 inherit;padding:11px 14px;width:150px;text-align:center;
+    letter-spacing:.35em;outline:0}
+  #pw:focus{border-color:var(--gold)}
+  #go{border:0;background:var(--gold);color:#1a1408;font:600 14px/1 inherit;
+    padding:12px 18px;border-radius:10px;cursor:pointer}
+  #gateNo{color:#ff9d86;font-size:12.5px;min-height:1em;margin:0}
+
   @media (max-width:560px){
     #hud{display:none}
     .lab{font-size:11px}
@@ -88,6 +102,17 @@
 </style>
 </head>
 <body>
+
+<div id="gate">
+  <h1>약속의 땅</h1>
+  <p>암호를 넣으십시오</p>
+  <form id="gateForm" autocomplete="off">
+    <input id="pw" type="password" inputmode="numeric" autocomplete="off"
+           aria-label="암호" maxlength="24">
+    <button id="go" type="submit">들어가기</button>
+  </form>
+  <p id="gateNo"></p>
+</div>
 
 <div id="boot">
   <h1>약속의 땅</h1>
@@ -131,6 +156,43 @@
     document.write('<script src="https://unpkg.com/three@0.128.0/build/three.min.js"><\/script>');
   }
 </script>
-<script src="app.js"></script>
+<script>
+  // 암호 — 맞으면 그때 지도를 불러온다.
+  //
+  // 이건 자물쇠가 아니라 **커튼**이다. 소스를 열면 이 검사 코드가 보이고,
+  // 자료 파일은 주소만 알면 그냥 받아진다. 모르는 사람이 우연히 들어오는
+  // 것을 막는 정도로만 쓸 것. 암호 자체는 적어 두지 않고 뒤섞은 값만 둔다.
+  (function () {
+    var KEY = '1y8ryty';
+    var gate = document.getElementById('gate');
+    var pw   = document.getElementById('pw');
+    var no   = document.getElementById('gateNo');
+
+    function scramble(s) {
+      var h = 5381, t = 'TheLand::' + s;
+      for (var i = 0; i < t.length; i++) h = ((h * 33) ^ t.codePointAt(i)) >>> 0;
+      return h.toString(36);
+    }
+    function open() {
+      gate.remove();
+      var s = document.createElement('script');
+      s.src = 'app.js';
+      document.body.appendChild(s);
+    }
+    try { if (sessionStorage.getItem('theland.ok') === KEY) return open(); } catch (e) {}
+
+    document.getElementById('gateForm').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      if (scramble(pw.value.trim()) !== KEY) {
+        no.textContent = '암호가 다릅니다';
+        pw.value = ''; pw.focus();
+        return;
+      }
+      try { sessionStorage.setItem('theland.ok', KEY); } catch (e) {}
+      open();
+    });
+    pw.focus();
+  })();
+</script>
 </body>
 </html>
