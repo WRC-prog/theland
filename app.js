@@ -1532,11 +1532,14 @@ function addViewButtons() {
     '#tools .btn i.txt{font:700 11.5px/1 inherit;letter-spacing:-.02em}' +
     '#tools .btn u{text-decoration:none;font-size:12.5px;font-weight:600}' +
     '#tools .btn u.big{font-size:14px;font-weight:700}' +
+    // 찾기 칸은 아무리 좁아도 글자 몇 자는 보여야 한다. 예전에는 단추들에
+    // 밀려 「지명」 넉 자짜리 알약이 되어 버렸다.
+    '#search{flex:1 1 220px;min-width:170px}' +
     '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}' +
     // 폰에서는 찾기 칸이 단추들에 밀려 손톱만 해진다. 아래로 한 줄 내려
     // 화면 너비를 다 쓰게 한다. 글씨도 16px — 그보다 작으면 사파리가
     // 칸을 누를 때마다 화면을 확 당긴다.
-    '@media (max-width:660px){' +
+    '@media (max-width:900px){' +
       '#top{flex-wrap:wrap;gap:6px}' +
       '#search{flex:1 1 100%;max-width:none;order:2}' +
       '#q{padding:12px 14px;font-size:16px}' +
