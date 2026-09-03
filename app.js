@@ -200,14 +200,18 @@ function initGL() {
 }
 
 /** 높이 그림 한 장을 지형 판으로 세운다 */
-function makeTerrain(tile, segX, segZ, tex, clip) {
+function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const x0 = worldX(tile.lonMin), x1 = worldX(tile.lonMax);
   const z0 = worldZ(tile.latMax), z1 = worldZ(tile.latMin);   // 위도는 뒤집힌다
   const w = x1 - x0, d = z1 - z0;
 
-  const geo = new THREE.PlaneBufferGeometry(w, d, segX, segZ);
+  // win 을 주면 타일 **한 조각**만 세운다. 눈금(uv)은 타일 전체를 기준으로
+  // 그대로 두므로, 같은 그림에서 훨씬 촘촘한 판을 뜰 수 있다.
+  const gx = win ? win.x : x0, gz = win ? win.z : z0;
+  const gw = win ? win.w : w,  gd = win ? win.d : d;
+  const geo = new THREE.PlaneBufferGeometry(gw, gd, segX, segZ);
   geo.rotateX(-Math.PI / 2);
-  geo.translate(x0 + w / 2, 0, z0 + d / 2);
+  geo.translate(gx + gw / 2, 0, gz + gd / 2);
 
   const mat = new THREE.ShaderMaterial({
     uniforms: {
@@ -215,6 +219,11 @@ function makeTerrain(tile, segX, segZ, tex, clip) {
       texel: { value: new THREE.Vector2(1 / tile.w, 1 / tile.h) },
       bounds: { value: new THREE.Vector4(x0, z0, w, d) },
       vex: { value: VEXAG },
+      vexf: { value: VEXAG },
+      mpp: { value: new THREE.Vector2(
+        (tile.lonMax - tile.lonMin) * KM_LON * 1000 / Math.max(tile.w - 1, 1),
+        (tile.latMax - tile.latMin) * KM_LAT * 1000 / Math.max(tile.h - 1, 1)) },
+      geo: { value: new THREE.Vector4(ORIGIN.lon, ORIGIN.lat, KM_LON, KM_LAT) },
       sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
       fogCol: { value: new THREE.Color(0x0b0d10) },
       fogDen: { value: 0.0009 },
@@ -246,7 +255,10 @@ function makeTerrain(tile, segX, segZ, tex, clip) {
       uniform vec3 sun;
       uniform vec3 fogCol;
       uniform float fogDen;
+      uniform float vexf;
       uniform vec4 clip;
+      uniform vec2 mpp;      // 칸 하나가 덮는 실제 거리 (m) — 동서, 남북
+      uniform vec4 geo;      // 기준 경도·위도와 1도의 km
       varying vec2 vUv;
       varying float vH;
       varying vec3 vWorld;
@@ -254,9 +266,34 @@ function makeTerrain(tile, segX, segZ, tex, clip) {
         vec3 c = texture2D(hmap, uv).rgb;
         return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0;
       }
-      vec3 ramp(float h){
+      // 실제 지중해 해안선. 바다냐 뭍이냐는 높이만으로 가릴 수 없다 —
+      // 요르단 지구대와 아라바 골짜기는 해수면보다 낮지만 **마른 땅**이다.
+      // 그걸 파랗게 칠하니 요단 골짜기가 통째로 강이 되어 있었다.
+      float coastLon(float la){
+        if (la < 31.29) return mix(33.900, 34.230, clamp((la-31.05)/0.24, 0.0, 1.0));
+        if (la < 31.80) return mix(34.230, 34.620, (la-31.29)/0.51);
+        if (la < 32.33) return mix(34.620, 34.840, (la-31.80)/0.53);
+        if (la < 32.72) return mix(34.840, 34.935, (la-32.33)/0.39);
+        if (la < 32.95) return mix(34.935, 35.074, (la-32.72)/0.23);
+        if (la < 33.27) return mix(35.074, 35.190, (la-32.95)/0.32);
+        return mix(35.190, 35.390, clamp((la-33.27)/0.33, 0.0, 1.0));
+      }
+      bool wetAt(float h, float la, float lo){
+        if (h >= 0.0) return false;
+        bool dry = false;
+        if (la > 31.05 && la < 33.75 && lo > 34.20 && lo < 36.30) dry = lo > coastLon(la) + 0.06;
+        if (la > 29.62 && la <= 31.05 && lo > 34.95 && lo < 35.80) dry = true;   // 아라바 골짜기
+        if (la > 28.30 && la < 30.60 && lo > 25.80 && lo < 29.60) dry = true;   // 카타라 저지
+        // 지구대 안에도 진짜 물은 있다 — 사해(수면 -430 m)와 갈릴리 바다(-210 m)
+        if (la > 31.00 && la < 31.79 && lo > 35.32 && lo < 35.62 && h < -415.0) dry = false;
+        if (la > 32.68 && la < 32.92 && lo > 35.47 && lo < 35.68 && h < -195.0) dry = false;
+        return !dry;
+      }
+      vec3 ramp(float h, bool wet){
         // 표고 색 — 바다, 저지, 들, 구릉, 산, 눈
-        if (h < 0.0)   return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
+        if (wet)       return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
+        // 해수면보다 낮은 마른 땅 — 지구대 바닥의 먼지빛
+        if (h < 0.0)   return mix(vec3(0.44,0.41,0.27), vec3(0.35,0.46,0.26), clamp(h/-450.0+1.0,0.0,1.0));
         if (h < 200.0) return mix(vec3(0.35,0.46,0.26), vec3(0.44,0.50,0.28), h/200.0);
         if (h < 500.0) return mix(vec3(0.44,0.50,0.28), vec3(0.55,0.51,0.30), (h-200.0)/300.0);
         if (h < 900.0) return mix(vec3(0.55,0.51,0.30), vec3(0.58,0.46,0.32), (h-500.0)/400.0);
@@ -286,10 +323,18 @@ function makeTerrain(tile, segX, segZ, tex, clip) {
         float hr = hLin(vUv + vec2(texel.x, 0.0));
         float hu = hLin(vUv - vec2(0.0, texel.y));
         float hd = hLin(vUv + vec2(0.0, texel.y));
-        vec3 n = normalize(vec3((hl - hr) * 0.02, 1.0, (hu - hd) * 0.02));
+        // 그늘은 **실제 땅 거리**로 잰다. 예전에는 칸 하나를 무조건 0.02 로
+        // 쳤는데, 가나안 판은 한 칸이 110 m 이고 넓은 판은 1.4 km 다 —
+        // 같은 잣대를 대니 넓은 판이 열세 배 세게 그늘져서 두 판이 만나는
+        // 자리에 네모난 테두리가 드러났다.
+        vec3 n = normalize(vec3((hl - hr) * vexf / (2.0 * mpp.x), 1.0,
+                                (hu - hd) * vexf / (2.0 * mpp.y)));
         float lam = clamp(dot(n, sun), 0.0, 1.0);
-        vec3 col = ramp(h) * (0.42 + 0.78 * lam);
-        if (h < 0.0) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
+        float lo = geo.x + vWorld.x / geo.z;
+        float la = geo.y - vWorld.z / geo.w;
+        bool wet = wetAt(h, la, lo);
+        vec3 col = ramp(h, wet) * (0.42 + 0.78 * lam);
+        if (wet) col = mix(col, vec3(0.10,0.25,0.36), 0.55);
         float d = length(vWorld - cameraPosition);
         float f = 1.0 - exp(-fogDen * fogDen * d * d);
         gl_FragColor = vec4(mix(col, fogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -310,6 +355,61 @@ function loadTexture(url) {
       res(t);
     }, undefined, e => rej(new Error(url + ' 를 불러오지 못했습니다')));
   });
+}
+
+// ── 가까이 볼 때의 촘촘한 조각 ──────────────────────────────
+//
+// 가나안 판은 3000×3400 칸(110 m)짜리 그림을 600×680 꼭짓점으로 세운다 —
+// 꼭짓점 하나가 550 m 를 맡는 셈이라, 다가가면 땅이 뭉개져 보였다.
+// 그래서 **카메라가 보는 자리만** 따로 촘촘하게 뜬다. 자료를 더 받지 않고
+// 같은 그림에서 조각만 다시 뜨는 것이라 값이 싸다.
+//
+// 겹치면 서로 파고들므로, 밑에 깔린 큰 판에게는 그 네모를 비우라고 이른다.
+let baseCanaan = null, canaanTex = null, canaanTile = null;
+let detailMesh = null, detailWin = null;
+
+function setBaseClip(r) {
+  if (!baseCanaan) return;
+  baseCanaan.material.uniforms.clip.value.set(
+    r ? r.x : 0, r ? r.z : 0, r ? r.x + r.w : -1, r ? r.z + r.d : -1);
+}
+
+function dropDetail() {
+  if (!detailMesh) return;
+  scene.remove(detailMesh);
+  detailMesh.geometry.dispose(); detailMesh.material.dispose();
+  detailMesh = null; detailWin = null;
+  setBaseClip(null);
+}
+
+function updateDetail() {
+  if (!baseCanaan || !canaanTex) return;
+  if (cam.dist > 200) { dropDetail(); return; }   // 멀리서는 큰 판으로 넉넉하다
+
+  const half = Math.max(6, Math.min(70, cam.dist * 1.15));
+  const need = !detailWin
+    || Math.abs(cam.tx - detailWin.cx) > half * 0.3
+    || Math.abs(cam.tz - detailWin.cz) > half * 0.3
+    || Math.abs(Math.log(cam.dist / detailWin.dist)) > 0.5;
+  if (!need) return;
+
+  const t = canaanTile;
+  const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
+  const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
+  const x = Math.max(tx0, cam.tx - half), z = Math.max(tz0, cam.tz - half);
+  const w = Math.min(tx1, cam.tx + half) - x, d = Math.min(tz1, cam.tz + half) - z;
+  if (w < 2 || d < 2) { dropDetail(); return; }   // 타일 밖이면 그만둔다
+
+  // 그림이 가진 것보다 촘촘히 뜰 까닭은 없다 — 110 m 칸이 한계다
+  const segX = Math.min(760, Math.max(80, Math.round(w * 1000 / 110)));
+  const segZ = Math.min(760, Math.max(80, Math.round(d * 1000 / 110)));
+
+  if (detailMesh) { scene.remove(detailMesh); detailMesh.geometry.dispose(); detailMesh.material.dispose(); }
+  detailMesh = makeTerrain(t, segX, segZ, canaanTex, null, { x, z, w, d });
+  detailMesh.renderOrder = 1;
+  scene.add(detailMesh);
+  detailWin = { cx: cam.tx, cz: cam.tz, dist: cam.dist, x, z, w, d };
+  setBaseClip(detailWin);
 }
 
 // ── 이름표 ────────────────────────────────────────────────
@@ -391,6 +491,7 @@ function applyCam() {
   // 길은 세계 눈금으로 그리므로 멀어지면 실오라기가 되고 다가가면 밭두렁이 된다.
   // 배쯤 달라졌을 때만 다시 굽는다 — 끌 때마다 다시 만들 일은 아니다.
   if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.5) drawRoute();
+  updateDetail();
   updateHUD();
 }
 
@@ -421,7 +522,7 @@ function flyTo(s, dist) {
 function bindControls() {
   const el = renderer.domElement;
   const pts = new Map();                 // 지금 눌려 있는 손가락·단추
-  let mode = null, last = null, twoD = 0, twoMid = null;
+  let mode = null, last = null, twoD = 0, twoA = 0, twoMid = null;
 
   // 화면 **전체**에서 받는다. 예전에는 그림판(canvas)에서만 받았는데,
   // 이름표가 그림판 위에 덮여 있어서 그 위에서 굴리면 사건이 그림판까지
@@ -445,6 +546,7 @@ function bindControls() {
       const v = [...pts.values()];
       mode = 'two';
       twoD = Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
+      twoA = Math.atan2(v[1].y - v[0].y, v[1].x - v[0].x);
       twoMid = { x: (v[0].x + v[1].x) / 2, y: (v[0].y + v[1].y) / 2 };
     }
   });
@@ -458,10 +560,17 @@ function bindControls() {
       const v = [...pts.values()];
       const d = Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
       const mid = { x: (v[0].x + v[1].x) / 2, y: (v[0].y + v[1].y) / 2 };
-      if (twoD > 0 && d > 0) cam.dist *= twoD / d;          // 오므리면 다가간다
-      cam.az -= (mid.x - twoMid.x) * 0.006;                 // 함께 옆으로 = 돌리기
-      cam.el += (mid.y - twoMid.y) * 0.006;                 // 함께 위아래 = 기울이기
-      twoD = d; twoMid = mid;
+      // 지도를 만지는 손버릇 그대로 — 오므리면 확대, 나란히 밀면 **옮기기**,
+      // **비틀면** 돌리기. 예전에는 나란히 미는 것이 돌리기라 어색했다.
+      // 기울이는 것은 손가락으로 가리기 어려워 ⌃ ⌄ 단추에 맡긴다.
+      const a = Math.atan2(v[1].y - v[0].y, v[1].x - v[0].x);
+      if (twoD > 0 && d > 0) cam.dist *= twoD / d;
+      let da = a - twoA;
+      while (da >  Math.PI) da -= 2.0 * Math.PI;
+      while (da < -Math.PI) da += 2.0 * Math.PI;
+      if (Math.abs(da) < 0.5) cam.az += da;                 // 홱 튀는 값은 버린다
+      panBy(mid.x - twoMid.x, mid.y - twoMid.y);
+      twoD = d; twoA = a; twoMid = mid;
       applyCam();
       return;
     }
@@ -903,7 +1012,9 @@ function tick() {
 
     const texC = await loadTexture(canaan.file);
     say(L.s('가나안 지형', 'Canaan terrain'), 65);
-    scene.add(makeTerrain(canaan, 600, 680, texC));
+    baseCanaan = makeTerrain(canaan, 600, 680, texC);
+    canaanTex = texC; canaanTile = canaan;
+    scene.add(baseCanaan);
     const canaanClip = new THREE.Vector4(
       worldX(canaan.lonMin), worldZ(canaan.latMax),
       worldX(canaan.lonMax), worldZ(canaan.latMin));
@@ -928,7 +1039,9 @@ function tick() {
       applyCam();
 
       loadTexture(region.file).then(texR => {
-        const m = makeTerrain(region, 420, 240, texR, canaanClip);
+        // 3280×1760 짜리 그림을 420×240 으로 세우면 여덟 칸에 꼭짓점 하나다.
+      // 가나안 밖이 유독 뭉개져 보이던 까닭이 그것이다. 그림만큼 세운다.
+      const m = makeTerrain(region, 1000, 540, texR, canaanClip);
         m.renderOrder = -1;
         scene.add(m);
         setTimeout(() => {
