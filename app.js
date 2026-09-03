@@ -962,7 +962,7 @@ function updateLabels() {
   const camPos = camera.position;
   for (const s of SITES) {
     if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
-    if (s.rank >= 10 && cam.dist > 12) continue;         // 성 안의 것은 가까이서만
+    if (s.rank === 10 && cam.dist > 12) continue;        // 성 안의 것은 가까이서만
     // 골라 둔 곳과 방금 찾은 곳은 어떤 셈에도 걸리지 않는다 — 늘 뜬다.
     const keep = MARKED.has(s.ko) || highlight === s.ko;
     if (!keep) {
@@ -1739,17 +1739,31 @@ function scanText(t) {
       if (free && k.length === 1 && !oneLetterLooksLikePlace(t, i, k.length)) free = false;
       if (!free) continue;
       for (let x = i; x < i + needle.length; x++) taken[x] = true;
-      raw.push({ at: i, s: SCANKEYS.get(k)[0] });
+      raw.push({ at: i, cands: SCANKEYS.get(k) });
     }
   }
   raw.sort((a, b) => a.at - b.at);
+
+  // 헷갈리지 않는 곳(후보가 하나뿐인 것)을 기둥으로 삼는다.
+  const anchors = raw.filter(r => r.cands.length === 1).map(r => r.cands[0]);
+  const reach = c => {
+    if (!anchors.length) return 0;
+    let best = 1e9;
+    for (const a of anchors) { const d = kmLL(a, c); if (d < best) best = d; }
+    return best;
+  };
+
   const out = [];
   let last = null;
   for (const r of raw) {
+    const opts = r.cands.length > 1 && anchors.length
+      ? r.cands.slice().sort((a, b) => reach(a) - reach(b))
+      : r.cands;
+    const pick = opts[0];
     // 잇달아 같은 곳이면 한 번만. 한참 뒤에 다시 나오면 그때 또 들른 것이다.
-    if (last === r.s.ko) continue;
-    last = r.s.ko;
-    out.push(r.s);
+    if (last === pick.ko) continue;
+    last = pick.ko;
+    out.push({ s: pick, options: opts });
   }
   return out;
 }
@@ -1790,20 +1804,67 @@ qEl.addEventListener('input', () => {
   }
   let head = '';
   const found = q.length >= 5 ? scanText(q) : [];
-  if (found.length >= 2) {
-    head = '<div class="hit sentence" data-scan="1"><b>' +
-      escapeHTML(L.s('이 문장에서 ' + found.length + '곳', found.length + ' places in this line')) +
-      '</b><s>' + escapeHTML(found.map(s => L.place(s.ko)).join(' → ')) + '</s></div>';
-  }
   window.__scan = found;
-  hitsEl.innerHTML = head + out.map((o, i) =>
+  window.__pick = null;
+  if (found.length >= 1) head = scanRow();
+  window.__hitRest = out.map((o, i) =>
     '<div class="hit" data-i="' + o.s.i + '">' +
     '<button class="hmark' + (MARKED.has(o.s.ko) ? ' on' : '') + '" data-mark="' + o.s.i + '">' +
     escapeHTML(MARKED.has(o.s.ko) ? L.s('표시 끄기', 'Unmark') : L.s('표시', 'Mark')) + '</button>' +
     '<b>' + escapeHTML(L.place(o.s.ko)) +
     '</b><s>' + escapeHTML(o.sub) + '</s></div>').join('');
+  hitsEl.innerHTML = head + window.__hitRest;
 });
+/** 문장에서 찾은 곳들을 이름표로 늘어놓는다.
+ *  같은 이름이 여러 곳인 것(라마·베델…)은 눌러서 고를 수 있다. */
+function scanRow() {
+  const found = window.__scan || [];
+  const pickAt = window.__pick;
+  const chips = found.map((h, i) =>
+    '<button class="schip' + (h.options.length > 1 ? ' many' : '') +
+    (pickAt === i ? ' open' : '') + '" data-pick="' + i + '">' +
+    escapeHTML(L.place(h.s.ko)) +
+    (h.options.length > 1 ? '<u>' + h.options.length + '</u>' : '') + '</button>').join('');
+  let opts = '';
+  if (pickAt != null && found[pickAt] && found[pickAt].options.length > 1) {
+    opts = '<div class="sopts">' + found[pickAt].options.map((o, k) =>
+      '<button data-opt="' + k + '"' + (o.ko === found[pickAt].s.ko ? ' class="sel"' : '') + '>' +
+      escapeHTML(L.place(o.ko)) + '<s>' + escapeHTML(L.region(o.region)) + '</s></button>').join('') +
+      '</div>';
+  }
+  return '<div class="hit sentence"><b>' +
+    escapeHTML(L.s('이 문장에서 ' + found.length + '곳', found.length + ' places in this line')) +
+    '</b><span class="schips">' + chips + '</span>' + opts +
+    '<span class="sbtns">' +
+    '<button data-scan="mark">' + escapeHTML(L.s('표시하기', 'Mark on map')) + '</button>' +
+    '<button data-scan="route" class="go">' +
+    escapeHTML(found.length >= 2 ? L.s('경로 만들기', 'Build route')
+                                 : L.s('이 곳으로', 'Go here')) + '</button>' +
+    '</span></div>';
+}
+
 hitsEl.addEventListener('click', e => {
+  // 어느 라마인지 고르기
+  const chip = e.target.closest('[data-pick]');
+  if (chip) {
+    e.stopPropagation();
+    const i = +chip.dataset.pick;
+    const h = (window.__scan || [])[i];
+    if (h && h.options.length > 1) {
+      window.__pick = (window.__pick === i) ? null : i;
+      hitsEl.innerHTML = scanRow() + (window.__hitRest || '');
+    }
+    return;
+  }
+  const op = e.target.closest('[data-opt]');
+  if (op) {
+    e.stopPropagation();
+    const h = (window.__scan || [])[window.__pick];
+    if (h) h.s = h.options[+op.dataset.opt];
+    window.__pick = null;
+    hitsEl.innerHTML = scanRow() + (window.__hitRest || '');
+    return;
+  }
   // 「표시」 — 골라 둔 곳은 자잘한 마을이라도 늘 지도에 뜬다.
   // 이때 찾기 칸은 닫지 않는다. 몇 곳을 잇달아 골라 둘 수 있어야 한다.
   const mk = e.target.closest('[data-mark]');
@@ -1815,12 +1876,29 @@ hitsEl.addEventListener('click', e => {
     mk.textContent = MARKED.has(site.ko) ? L.s('표시 끄기', 'Unmark') : L.s('표시', 'Mark');
     return;
   }
-  const row = e.target.closest('.hit'); if (!row) return;
-  if (row.dataset.scan) {
+  const sc = e.target.closest('[data-scan]');
+  if (sc) {
+    e.stopPropagation();
+    const list = window.__scan || [];
+    // 앱과 같다 — 경로는 만들지 않고 색깔로만 짚어 주는 길을 따로 둔다.
+    // 같은 곳이 여러 번 나와도 표시는 한 번이면 된다.
+    const sites = list.map(h => h.s);
+    const seen = new Set(), uniq = [];
+    for (const st of sites) if (!seen.has(st.ko)) { seen.add(st.ko); uniq.push(st); }
+    if (sc.dataset.scan === 'mark') {
+      for (const st of uniq) MARKED.add(st.ko);
+      saveMarked(); updateLabels();
+      if (uniq.length) flyTo(uniq[0]);
+      toast(L.s(uniq.length + '곳을 표시했습니다', 'Marked ' + uniq.length + ' places'));
+    } else if (sites.length >= 2) {
+      routeFromText(sites);
+    } else if (uniq.length) {
+      flyTo(uniq[0]); showCard(uniq[0]);
+    }
     hitsEl.innerHTML = ''; qEl.blur();
-    if (window.__scan && window.__scan.length >= 2) routeFromText(window.__scan);
     return;
   }
+  const row = e.target.closest('.hit'); if (!row) return;
   const s = SITES[+row.dataset.i];
   hitsEl.innerHTML = ''; qEl.blur();
   flyTo(s); showCard(s);
@@ -3388,6 +3466,27 @@ jgrpCSS.textContent =
   'border:1px solid rgba(255,255,255,.18);background:none;color:#b9b1a3;' +
   'font:600 11.5px/1 inherit;padding:0 9px;height:26px;border-radius:13px;cursor:pointer}' +
   '.hmark.on{background:rgba(253,204,97,.9);color:#231702;border-color:transparent}' +
+  '.hit.sentence{padding-right:12px}' +
+  '.sbtns{display:flex;gap:6px;margin-top:8px}' +
+  '.sbtns button{border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.05);' +
+  'color:var(--ink);font:600 12px/1 inherit;padding:0 12px;height:30px;' +
+  'border-radius:15px;cursor:pointer}' +
+  '.sbtns button:hover{background:rgba(255,255,255,.12)}' +
+  '.sbtns button.go{background:#f5e6c2;color:rgba(0,0,0,.85);border-color:transparent}' +
+  '.schips{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}' +
+  '.schip{display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.16);' +
+  'background:rgba(255,255,255,.05);color:var(--ink);font:600 12px/1 inherit;' +
+  'padding:0 10px;height:27px;border-radius:14px;cursor:default}' +
+  '.schip.many{cursor:pointer;border-color:rgba(253,204,97,.55)}' +
+  '.schip.many u{text-decoration:none;font-size:10px;color:#231702;background:rgba(253,204,97,.9);' +
+  'border-radius:8px;padding:1px 5px}' +
+  '.schip.open{background:rgba(253,204,97,.18)}' +
+  '.sopts{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;padding:8px;' +
+  'border-radius:10px;background:rgba(255,255,255,.05)}' +
+  '.sopts button{border:1px solid rgba(255,255,255,.16);background:none;color:var(--ink);' +
+  'font:600 12px/1.3 inherit;padding:6px 10px;border-radius:10px;cursor:pointer;text-align:left}' +
+  '.sopts button.sel{background:rgba(253,204,97,.9);color:#231702;border-color:transparent}' +
+  '.sopts button s{display:block;text-decoration:none;font-size:10.5px;opacity:.7;margin-top:2px}' +
   // 표시해 둔 이름표
   '.lab.mark{color:#ffe6a8}' +
   '.lab.mark i{background:#ffd36a;box-shadow:0 0 9px rgba(255,211,106,.95)}' +
