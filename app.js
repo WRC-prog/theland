@@ -53,6 +53,32 @@ function fold(s) {
 }
 
 // ── 자료 ──────────────────────────────────────────────────
+// ── 화질 ──────────────────────────────────────────────────
+//
+// 지형 그림은 상 48 MB · 중 20 MB · 하 11 MB 다. 와이파이에서는 몇 초지만
+// 데이터로는 만만치 않다. 그래서 **연결을 보고 낮은 쪽으로 연다.**
+// 고른 것은 기억해 두고, 바꾸면 새로 열어 다시 받는다.
+const QUALS = ['low', 'mid', 'hi'];
+function autoQual() {
+  const c = navigator.connection || {};
+  if (c.saveData) return 'low';
+  const t = c.effectiveType || '';
+  if (t === 'slow-2g' || t === '2g' || t === '3g') return 'low';
+  if (c.type === 'cellular') return 'low';
+  return 'mid';
+}
+let QUAL = 'mid', qualAuto = false;
+try {
+  const saved = localStorage.getItem('theland.qual');
+  if (QUALS.indexOf(saved) >= 0) QUAL = saved;
+  else { QUAL = autoQual(); qualAuto = true; }
+} catch (e) { QUAL = 'mid'; }
+
+/** 화질에 맞는 그림 이름 — 상은 본이름 그대로 */
+function qualFile(f) {
+  return QUAL === 'hi' ? f : f.replace(/\.png$/, '_' + QUAL + '.png');
+}
+
 let SITES = [], EVENTS = [], NOTES = new Map(), I18N = null, TERRAIN = null;
 let byPlace = new Map();          // 지명 → 사건들
 let siteByName = new Map();
@@ -723,16 +749,25 @@ function addViewButtons() {
     tools.insertBefore(b, tools.firstChild);
     return b;
   };
-  // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로)
-  mk('⌄', L.s('눕히기', 'Lower the view'),  () => { cam.el -= 0.16; applyCam(); });
+  // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
+  // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
   mk('⇢', L.s('길', 'Journeys'), openRoutes);
-  lookBtn = mk('◎', L.s('둘러보기', 'Look around'), () => {
+  lookBtn = mk('◎', L.s('둘러보기 — 제자리에서 사방을 본다', 'Look around'), () => {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
-  mk('⌃', L.s('세우기', 'Raise the view'),  () => { cam.el += 0.16; applyCam(); });
-  mk('−', L.s('물러서기', 'Zoom out'),      () => zoomAt(1.35));
-  mk('＋', L.s('다가가기', 'Zoom in'),       () => zoomAt(1 / 1.35));
+  const qName = { low: L.s('하', 'Low'), mid: L.s('중', 'Mid'), hi: L.s('상', 'High') };
+  const qBtn = mk(qName[QUAL], L.s('화질 — 누르면 상·중·하로 돕니다', 'Detail'), () => {
+    const nx = QUALS[(QUALS.indexOf(QUAL) + 1) % 3];
+    try { localStorage.setItem('theland.qual', nx); } catch (e) {}
+    location.reload();
+  });
+  qBtn.style.fontWeight = '700';
+
+  // 데이터로 들어온 듯하면 한 번만 알려 준다
+  if (qualAuto && QUAL === 'low') toast(L.s(
+    '데이터 연결로 보여 지형을 가볍게(하) 열었습니다. 위 「하」를 눌러 올릴 수 있습니다.',
+    'Looks like a mobile connection — opened at low detail. Tap “Low” above to raise it.'));
 }
 
 function updateHUD() {
@@ -1616,6 +1651,22 @@ labSizeCSS.textContent =
   '.lab.r2{font-size:12px}.lab.r3{font-size:11px}}';
 document.head.appendChild(labSizeCSS);
 
+/** 화면 아래에 잠깐 뜨는 알림 */
+function toast(text) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 6000);
+}
+const toastCSS = document.createElement('style');
+toastCSS.textContent =
+  '.toast{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);z-index:40;' +
+  'max-width:min(520px,92vw);padding:10px 14px;border-radius:12px;background:var(--panel);' +
+  'border:1px solid var(--line);color:var(--ink);font-size:12.5px;line-height:1.5;' +
+  'backdrop-filter:blur(12px);transition:opacity .5s;text-align:center}';
+document.head.appendChild(toastCSS);
+
 const routeCSS = document.createElement('style');
 routeCSS.textContent =
   '.rbtn{border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--ink);' +
@@ -1646,7 +1697,7 @@ function tick() {
 
     placeSites();                       // 높이는 아직 0 — 지형을 읽고 다시 매긴다
 
-    const texC = await loadTexture(canaan.file);
+    const texC = await loadTexture(qualFile(canaan.file));
     say(L.s('가나안 지형', 'Canaan terrain'), 65);
     baseCanaan = makeTerrain(canaan, 600, 680, texC);
     canaanTex = texC; canaanTile = canaan;
@@ -1680,7 +1731,7 @@ function tick() {
       toggleRoads();        // 옛길은 앱처럼 처음부터 깔아 둔다
       applyCam();
 
-      loadTexture(region.file).then(texR => {
+      loadTexture(qualFile(region.file)).then(texR => {
         // 3280×1760 짜리 그림을 420×240 으로 세우면 여덟 칸에 꼭짓점 하나다.
       // 가나안 밖이 유독 뭉개져 보이던 까닭이 그것이다. 그림만큼 세운다.
       hTexB = texR; hBoundB = tileBounds(region);
