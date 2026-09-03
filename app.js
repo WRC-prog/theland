@@ -600,9 +600,16 @@ function updateRegions() {
     const segX = t.seg || 800;
     const segZ = Math.max(80, Math.round(segX * (t.latMax - t.latMin) * KM_LAT
                                               / ((t.lonMax - t.lonMin) * KM_LON)));
+    // 지역 판끼리 네모가 겹치는 자리가 있다(시리아와 소아시아처럼).
+    // 겹친 채로 두면 두 면이 서로 파고들어 얼룩이 진다. 먼저 온 판이
+    // 이기고, 나중 판은 그 네모를 비운다.
+    const rects = canaanTile ? [tileRect(canaanTile)] : [];
+    for (const f of (t.clipBy || [])) {
+      const o = REGIONS.find(x => x.file === f);
+      if (o) rects.push(tileRect(o));
+    }
     loadTexture(qualFile(t.file)).catch(() => loadTexture(t.file)).then(tex => {
-      const m = makeTerrain(t, segX, segZ, tex,
-                            canaanTile ? [tileRect(canaanTile)] : []);
+      const m = makeTerrain(t, segX, segZ, tex, rects);
       m.renderOrder = -0.5;                   // 성긴 배경보다 위, 가나안보다 아래
       scene.add(m);
       regionLoaded.set(t.file, m);
@@ -610,7 +617,7 @@ function updateRegions() {
       applyWorldClips();
       buildGrid(t, tex.image, Math.min(segX, 900), Math.min(segZ, 900));
       placeSites();
-    }).catch(() => { regionLoaded.delete(t.file); });
+    }).catch(() => { regionLoaded.set(t.file, 'none'); });   // 없는 판을 되풀이해 찾지 않는다
   }
 }
 
