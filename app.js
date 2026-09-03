@@ -897,7 +897,10 @@ function bindControls() {
   // 화면 **전체**에서 받는다. 예전에는 그림판(canvas)에서만 받았는데,
   // 이름표가 그림판 위에 덮여 있어서 그 위에서 굴리면 사건이 그림판까지
   // 못 오고 **바깥 쪽(구글 사이트)** 이 대신 움직였다.
-  const overUI = t => !!(t && t.closest && t.closest('#top, #panel, #gate'));
+  // 화면 위에 얹힌 것들은 지도가 아니다. 여기에 빠뜨리면 그 위에서 누른
+  // 손가락을 그림판이 가로채, 단추가 눌리지 않는다.
+  const overUI = t => !!(t && t.closest &&
+    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn'));
 
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
   // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
@@ -959,6 +962,10 @@ function bindControls() {
   });
 
   const end = e => {
+    // 지도를 톡 누르면 옆 판이 닫힌다. ✕ 는 손가락에 견주어 작아서,
+    // 폰에서는 몇 번을 눌러도 안 닫힌다는 말을 들었다. (끌었을 때는 그대로)
+    if (e.type === 'pointerup' && !overUI(e.target) && moved <= 3)
+      panel.classList.remove('open');
     pts.delete(e.pointerId);
     try { el.releasePointerCapture(e.pointerId); } catch (_) {}
     if (pts.size === 1) {
@@ -2440,6 +2447,12 @@ const openGroups = new Set();
 
 const jgrpCSS = document.createElement('style');
 jgrpCSS.textContent =
+  // 닫기 단추 — 손가락이 닿는 크기로. 옆에 붙은 작은 글씨는 밀려나지 않게 줄인다.
+  '#closeBtn{flex:0 0 auto;min-width:44px;height:44px;display:flex;' +
+  'align-items:center;justify-content:center;font-size:16px;border-radius:12px;' +
+  'border:1px solid rgba(255,255,255,.16)}' +
+  '#ph small{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
+  'white-space:nowrap}' +
   // 얼마나 자세히 — 다섯 칸
   '.dpick{display:flex;flex-wrap:wrap;gap:3px;margin:8px 0 6px}' +
   '.dpick button{flex:1 1 auto;border:1px solid rgba(255,255,255,.14);' +
