@@ -505,10 +505,14 @@ function setClips(mesh, rects) {
 }
 
 /** 타일 하나가 덮는 네모 (x0, z0, x1, z1) */
-function tileRect(t) {
-  return new THREE.Vector4(worldX(t.lonMin), worldZ(t.latMax),
-                           worldX(t.lonMax), worldZ(t.latMin));
+function tileRect(t, shrinkKm) {
+  const m = shrinkKm || 0;
+  return new THREE.Vector4(worldX(t.lonMin) + m, worldZ(t.latMax) + m,
+                           worldX(t.lonMax) - m, worldZ(t.latMin) - m);
 }
+// 이음매에서 성긴 판이 이만큼 덜 비운다 — 그만큼 촘촘한 판 밑으로 들어간다.
+// 딱 맞춰 비우면 그 사이에 아무것도 안 그려진 실낱 같은 금이 남았다.
+const SEAM_KM = 2.5;
 
 function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const x0 = worldX(tile.lonMin), x1 = worldX(tile.lonMax);
@@ -526,6 +530,10 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const iw = (tex.image && tex.image.width)  || tile.w;
   const ih = (tex.image && tex.image.height) || tile.h;
   const mat = new THREE.ShaderMaterial({
+    // 이음매에서 겹친 자리는 **촘촘한 판이 이긴다**. 화소가 작을수록 앞으로 당긴다.
+    polygonOffset: true,
+    polygonOffsetFactor: -Math.min(20, 1400 / Math.max(40, tile.mPerPx || 500)),
+    polygonOffsetUnits: -2,
     uniforms: {
       hmap: { value: tex },
       // 칸 수는 **그림에게 묻는다**. terrain.json 에 적힌 값과 어긋나면
@@ -765,17 +773,17 @@ function updateRegions() {
     // 지역 판끼리 네모가 겹치는 자리가 있다(시리아와 소아시아처럼).
     // 겹친 채로 두면 두 면이 서로 파고들어 얼룩이 진다. 먼저 온 판이
     // 이기고, 나중 판은 그 네모를 비운다.
-    const rects = canaanTile ? [tileRect(canaanTile)] : [];
+    const rects = canaanTile ? [tileRect(canaanTile, SEAM_KM)] : [];
     for (const f of (t.clipBy || [])) {
       const o = REGIONS.find(x => x.file === f);
-      if (o) rects.push(tileRect(o));
+      if (o) rects.push(tileRect(o, SEAM_KM));
     }
     loadTexture(qualFile(t.file, t)).catch(() => loadTexture(t.file)).then(tex => {
       const m = makeTerrain(t, segX, segZ, tex, rects);
       m.renderOrder = -0.5;                   // 성긴 배경보다 위, 가나안보다 아래
       scene.add(m);
       regionLoaded.set(t.file, m);
-      worldClips.push(tileRect(t));
+      worldClips.push(tileRect(t, SEAM_KM));
       // 다음 판은 이 판을 다 세운 뒤에 (한 번에 하나씩)
       applyWorldClips();
       // 높이 격자는 성기게 — 이천만 화소를 900×900 으로 훑으면 폰이 멎는다
@@ -861,6 +869,21 @@ let highlight = null;
 let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
 
 function labelCap() { return innerWidth < 560 ? 52 : 130; }
+
+/** 시점으로 서 있을 때, 이 곳이 산에 가려 안 보이는가.
+ *  눈에서 그 곳까지 곧게 가면서 땅이 그 선보다 높이 솟는 데가 있으면 가려진 것이다.
+ *  (하늘에서 내려다볼 때는 재지 않는다 — 그때는 다 보이는 것이 맞다) */
+function hiddenByLand(s, camPos) {
+  const steps = 14;
+  for (let i = 2; i < steps; i++) {
+    const t = i / steps;
+    const x = camPos.x + (s.x - camPos.x) * t;
+    const z = camPos.z + (s.z - camPos.z) * t;
+    const y = camPos.y + (s.y - camPos.y) * t;
+    if (groundAt(x, z) > y + 0.015) return true;
+  }
+  return false;
+}
 
 // ── 지명 상세도 — 앱과 같은 다섯 단계 ───────────────────────
 //
@@ -978,6 +1001,7 @@ function updateLabels() {
     if (v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) continue;
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
     if (!keep && d > (cam.dist * 3.2 + 60) * detailMul(s.rank)) continue;
+    if (fpv && !s.era && hiddenByLand(s, camPos)) continue;
     // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
     // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
@@ -2390,7 +2414,7 @@ function tileBounds(t) {
 }
 
 function drapeMaterial(color, opacity, lift, through, fade) {
-  return new THREE.ShaderMaterial({
+  const mt = new THREE.ShaderMaterial({
     transparent: true, depthTest: through !== true, depthWrite: false,
     side: THREE.DoubleSide, polygonOffset: true,
     polygonOffsetFactor: -8, polygonOffsetUnits: -12,
@@ -2443,6 +2467,21 @@ function drapeMaterial(color, opacity, lift, through, fade) {
       '}'
     ].join('\n')
   });
+  mt.userData.through = through === true;
+  return mt;
+}
+
+// 하늘에서 내려다볼 때는 길과 색을 땅 위에 **덮어** 그리는 편이 낫다.
+// 그런데 시점으로 땅에 내려서면 이야기가 달라진다 — 산 너머의 길이
+// 산을 뚫고 비쳐 보이면 어디가 가려진 곳인지 알 수가 없다.
+const dd = { fpv: null, n: -1 };
+function syncDrapeDepth() {
+  if (dd.fpv === fpv && dd.n === drapeMats.length) return;
+  dd.fpv = fpv; dd.n = drapeMats.length;
+  for (const m of drapeMats) {
+    const want = fpv ? true : !m.userData.through;
+    if (m.depthTest !== want) { m.depthTest = want; m.needsUpdate = true; }
+  }
 }
 
 /** 땅에 붙는 실 하나. 가운데가 진하고 가장자리는 스러진다. */
@@ -2799,6 +2838,9 @@ function syncSpeedBtn() {
     });
     dockEl().appendChild(spdBtn);
   }
+  const sig = (routePts && routePts.length > 1 ? 1 : 0) + '|' + speedIdx + '|' + L.cur;
+  if (sig === spdBtn._sig) return;
+  spdBtn._sig = sig;
   spdBtn.className = (routePts && routePts.length > 1) ? 'on' : '';
   spdBtn.title = L.s('걸음 빠르기', 'Travel speed');
   spdBtn.innerHTML = '<i>' + escapeHTML(L.s('빠르기', 'Speed')) + '</i>' +
@@ -2830,6 +2872,9 @@ function syncClrBtn() {
       '@media (max-width:560px){#clrBtn{padding:0 12px;font-size:12.5px}}';
     document.head.appendChild(st);
   }
+  const sig = ((routeStops && routeStops.length) ? 1 : 0) + '|' + L.cur;
+  if (sig === clrBtn._sig) return;
+  clrBtn._sig = sig;
   clrBtn.className = (routeStops && routeStops.length) ? 'on' : '';
   clrBtn.textContent = L.s('\u2715 경로 지우기', '\u2715 Clear route');
 }
@@ -2857,6 +2902,9 @@ function syncGoBtn() {
     document.head.appendChild(st);
   }
   const has = !!(routePts && routePts.length > 1);
+  const sig = (has ? 1 : 0) + '|' + (following ? 1 : 0) + '|' + L.cur;
+  if (sig === goBtn._sig) return;
+  goBtn._sig = sig;
   goBtn.className = (has ? 'on' : '') + (following ? ' going' : '');
   goBtn.textContent = following ? L.s('■  멈추기', '■  Stop') : L.s('▶  따라가기', '▶  Travel it');
 }
@@ -3733,6 +3781,7 @@ document.head.appendChild(routeCSS);
 let fpvT = 0;
 function tick() {
   requestAnimationFrame(tick);
+  syncDrapeDepth();
   stepKeys();
   if (fpv) { const n = performance.now(); stepFpv(fpvT ? Math.min(120, n - fpvT) : 16); fpvT = n; }
   else fpvT = 0;
@@ -3761,7 +3810,7 @@ function tick() {
     canaanTex = texC; canaanTile = canaan;
     hTexA = texC; hBoundA = tileBounds(canaan);
     scene.add(baseCanaan);
-    const canaanClip = tileRect(canaan);
+    const canaanClip = tileRect(canaan, SEAM_KM);
 
     addLakes();
     syncAreas();
