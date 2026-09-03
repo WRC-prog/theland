@@ -844,6 +844,46 @@ function openPlace(s) {
 }
 document.getElementById('closeBtn').onclick = () => panel.classList.remove('open');
 
+// ── 문장에서 곳 찾아내기 ──────────────────────────────────
+//
+// 「브엘세바에서 므깃도로」처럼 한 줄을 통째로 치면, 그 안에 든 지명을
+// **나온 차례대로** 집어낸다. 앱에서 잘 쓰던 것이라 여기에도 둔다.
+// 성구를 붙여 넣어도 그 안의 곳들이 다 잡힌다.
+function scanText(t) {
+  const f = fold(t);
+  if (f.length < 4) return [];
+  const raw = [];
+  for (const s of SITES) {
+    for (const key of [fold(s.ko), fold(s.en)]) {
+      if (!key || key.length < 2) continue;
+      let i = f.indexOf(key);
+      while (i >= 0) { raw.push({ at: i, len: key.length, s }); i = f.indexOf(key, i + 1); }
+    }
+  }
+  // 겹치면 긴 쪽만 남긴다 — 「벧엘」이 있는데 「벧」까지 잡으면 안 된다
+  raw.sort((a, b) => a.at - b.at || b.len - a.len);
+  const out = [];
+  let end = -1, seen = new Set();
+  for (const h of raw) {
+    if (h.at < end) continue;
+    end = h.at + h.len;
+    if (seen.has(h.s.ko)) continue;      // 같은 곳이 두 번 나오면 한 번만
+    seen.add(h.s.ko);
+    out.push(h.s);
+  }
+  return out;
+}
+
+/** 문장에서 집어낸 곳들로 길을 세운다 */
+function routeFromText(list) {
+  plan.start = list[0];
+  plan.end = list.length > 1 ? list[list.length - 1] : null;
+  plan.via = list.slice(1, -1);
+  setRoute(planStops());
+  frameRoute();
+  showCard(list[0]);
+}
+
 // ── 찾기 ──────────────────────────────────────────────────
 const qEl = document.getElementById('q'), hitsEl = document.getElementById('hits');
 qEl.addEventListener('input', () => {
@@ -868,12 +908,25 @@ qEl.addEventListener('input', () => {
       if (out.length >= 14) break;
     }
   }
-  hitsEl.innerHTML = out.map((o, i) =>
+  let head = '';
+  const found = q.length >= 5 ? scanText(q) : [];
+  if (found.length >= 2) {
+    head = '<div class="hit sentence" data-scan="1"><b>' +
+      escapeHTML(L.s('이 문장에서 ' + found.length + '곳', found.length + ' places in this line')) +
+      '</b><s>' + escapeHTML(found.map(s => L.place(s.ko)).join(' → ')) + '</s></div>';
+  }
+  window.__scan = found;
+  hitsEl.innerHTML = head + out.map((o, i) =>
     '<div class="hit" data-i="' + o.s.i + '"><b>' + escapeHTML(L.place(o.s.ko)) +
     '</b><s>' + escapeHTML(o.sub) + '</s></div>').join('');
 });
 hitsEl.addEventListener('click', e => {
   const row = e.target.closest('.hit'); if (!row) return;
+  if (row.dataset.scan) {
+    hitsEl.innerHTML = ''; qEl.blur();
+    if (window.__scan && window.__scan.length >= 2) routeFromText(window.__scan);
+    return;
+  }
   const s = SITES[+row.dataset.i];
   hitsEl.innerHTML = ''; qEl.blur();
   flyTo(s); showCard(s);
@@ -893,7 +946,8 @@ function applyLang() {
   document.getElementById('langBtn').textContent = L.cur === 'ko' ? 'EN' : '한';
   document.documentElement.lang = L.cur;
   document.title = L.s('약속의 땅', 'The Promised Land');
-  qEl.placeholder = L.s('지명·인물·낱말 찾기', 'Find a place, a person, a word');
+  qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
+                        'A place, a person, a word — or a whole line');
   qEl.dispatchEvent(new Event('input'));
   updateHUD(); updateLabels();
   if (panel.classList.contains('open')) {
@@ -1727,7 +1781,9 @@ routeCSS.textContent =
   '.jrn{cursor:pointer} .jrn:hover h3{color:var(--gold)}' +
   '.lrow{padding:9px 0;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:9px}' +
   '.lrow i{font-style:normal;color:var(--gold);font-size:12px;width:12px}' +
-  '.lrow:hover{color:var(--gold)}';
+  '.lrow:hover{color:var(--gold)}' +
+  '.hit.sentence{background:rgba(253,204,97,.10)}' +
+  '.hit.sentence b{color:var(--gold)}';
 document.head.appendChild(routeCSS);
 
 // ── 돌리기 ────────────────────────────────────────────────
