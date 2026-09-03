@@ -164,9 +164,21 @@ let siteByName = new Map();
 async function loadJSON(p) {
   // 'force-cache' 였다. 그러면 한 번 받은 것을 **영영** 다시 안 받는다 —
   // terrain.json 을 고쳐 올려도 브라우저가 옛 것을 계속 물고 있었다.
-  const r = await fetch(p, { cache: 'default' });
+  //
+  // terrain.json 은 지도의 뼈대라 옛 것을 물고 있으면 아예 열리지 않는다.
+  // 작은 파일이니 app.js 와 같이 늘 새로 받는다.
+  const bust = /terrain\.json$/.test(p) ? '?v=' + Math.floor(Date.now() / 60000) : '';
+  const r = await fetch(p + bust, { cache: 'default' });
   if (!r.ok) throw new Error(p + ' → ' + r.status);
-  return r.json();
+  try {
+    return await r.json();
+  } catch (e) {
+    // 받아 둔 것이 깨져 있으면(중간에 잘못 올라간 판을 물었을 수 있다)
+    // 한 번은 창고를 건너뛰고 새로 받아 본다.
+    const r2 = await fetch(p + (bust ? bust + '&' : '?') + 'r=' + Date.now(), { cache: 'reload' });
+    if (!r2.ok) throw e;
+    return r2.json();
+  }
 }
 
 function unpack(o) {                       // {cols, rows} → 객체 배열
