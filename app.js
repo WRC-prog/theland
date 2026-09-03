@@ -734,7 +734,7 @@ const AREACOLOR = new Map();
 let highlight = null;
 let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
 
-function labelCap() { return innerWidth < 560 ? 44 : 110; }
+function labelCap() { return innerWidth < 560 ? 52 : 130; }
 
 // ── 지명 상세도 — 앱과 같은 다섯 단계 ───────────────────────
 //
@@ -840,8 +840,12 @@ function updateLabels() {
     if (v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) continue;
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
     if (d > (cam.dist * 3.2 + 60) * mul) continue;
+    // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
+    // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
+    // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
+    const era = (s.rank === 5 || s.rank === 6 || s.rank === 9);
     cand.push({ s, sx: (v.x * .5 + .5) * innerWidth, sy: (-v.y * .5 + .5) * innerHeight, d,
-                score: s.rank * 1000 + d });
+                score: (era ? -900000 : s.rank * 1000) + d });
   }
   cand.sort((a, b) => a.score - b.score);
 
