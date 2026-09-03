@@ -296,6 +296,7 @@ function loadTexture(url) {
 const labelPool = [];
 let shown = [];
 let highlight = null;
+let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
 
 function labelCap() { return innerWidth < 560 ? 44 : 110; }
 
@@ -331,6 +332,7 @@ function updateLabels() {
     el.className = 'lab';
     el.addEventListener('click', ev => {
       ev.stopPropagation();
+      if (moved > 3) return;                 // 지도를 끌다가 뗀 것뿐이다
       const s = el._site; if (s) { openPlace(s); flyTo(s); }
     });
     labelRoot.appendChild(el); labelPool.push(el);
@@ -393,12 +395,19 @@ function bindControls() {
   const pts = new Map();                 // 지금 눌려 있는 손가락·단추
   let mode = null, last = null, twoD = 0, twoMid = null;
 
+  // 화면 **전체**에서 받는다. 예전에는 그림판(canvas)에서만 받았는데,
+  // 이름표가 그림판 위에 덮여 있어서 그 위에서 굴리면 사건이 그림판까지
+  // 못 오고 **바깥 쪽(구글 사이트)** 이 대신 움직였다.
+  const overUI = t => !!(t && t.closest && t.closest('#top, #panel, #gate'));
+
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
   // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
   const orbitish = e => e.button === 2 || e.button === 1
     || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
 
-  el.addEventListener('pointerdown', e => {
+  addEventListener('pointerdown', e => {
+    if (overUI(e.target)) return;
+    moved = 0;
     try { el.setPointerCapture(e.pointerId); } catch (_) {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) {
@@ -412,8 +421,9 @@ function bindControls() {
     }
   });
 
-  el.addEventListener('pointermove', e => {
+  addEventListener('pointermove', e => {
     if (!pts.has(e.pointerId)) return;
+    moved++;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (mode === 'two' && pts.size >= 2) {
@@ -443,15 +453,25 @@ function bindControls() {
       mode = 'pan'; last = { x: v.x, y: v.y };
     } else if (pts.size === 0) { mode = null; last = null; }
   };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-  el.addEventListener('pointerleave', end);
-  el.addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('pointerup', end);
+  addEventListener('pointercancel', end);
+  addEventListener('lostpointercapture', end);
+  addEventListener('contextmenu', e => { if (!overUI(e.target)) e.preventDefault(); });
 
   // 바퀴 — 화살표가 가리키는 곳으로 다가간다
-  el.addEventListener('wheel', e => {
+  // preventDefault 를 꼭 해야 한다. 안 하면 이 창이 아니라 **이 창을 담고 있는
+  // 쪽**(구글 사이트)이 대신 굴러간다.
+  addEventListener('wheel', e => {
+    if (overUI(e.target)) return;
     e.preventDefault();
     zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY);
+  }, { passive: false });
+
+  // 사파리는 두 손가락 벌리기를 제 나름대로 「쪽 넓히기」로 삼는다 — 막는다
+  for (const n of ['gesturestart', 'gesturechange', 'gestureend'])
+    addEventListener(n, e => e.preventDefault(), { passive: false });
+  addEventListener('touchmove', e => {
+    if (!overUI(e.target) && e.cancelable) e.preventDefault();
   }, { passive: false });
 
   // 자판으로도 — 화살표로 옮기고, +/- 로 다가가고, [ ] 로 기울인다
