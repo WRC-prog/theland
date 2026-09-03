@@ -2,6 +2,48 @@
  "encoding": "R*256+G, 미터 = 값 - 6000",
  "tiles": [
   {
+   "file": "canaan.png",
+   "w": 4730,
+   "h": 6308,
+   "lonMin": 33.9,
+   "lonMax": 36.9,
+   "latMin": 30.2,
+   "latMax": 33.6,
+   "mPerPx": 60
+  },
+  {
+   "file": "region.png",
+   "w": 6256,
+   "h": 3950,
+   "lonMin": 11.0,
+   "lonMax": 52.00057877069105,
+   "latMin": 21.0,
+   "latMax": 43.0,
+   "mPerPx": 620
+  }
+ ],
+ "regions": [
+  { "file": "terrain/지역/syria_rgb.png",
+    "lonMin": 34.0, "lonMax": 39.0, "latMin": 33.0, "latMax": 37.5, "mPerPx": 200 },
+  { "file": "terrain/지역/mesopotamia_rgb.png",
+    "lonMin": 38.0, "lonMax": 49.0, "latMin": 29.0, "latMax": 38.0, "mPerPx": 200,
+    "clipBy": ["terrain/지역/syria_rgb.png"] },
+  { "file": "terrain/지역/anatolia_rgb.png",
+    "lonMin": 26.0, "lonMax": 37.0, "latMin": 35.0, "latMax": 42.0, "mPerPx": 200,
+    "clipBy": ["terrain/지역/syria_rgb.png"] },
+  { "file": "terrain/지역/greece_rgb.png",
+    "lonMin": 19.0, "lonMax": 27.0, "latMin": 34.5, "latMax": 42.0, "mPerPx": 200,
+    "clipBy": ["terrain/지역/anatolia_rgb.png"] },
+  { "file": "terrain/지역/italy_rgb.png",
+    "lonMin": 11.0, "lonMax": 19.0, "latMin": 36.0, "latMax": 46.0, "mPerPx": 200 },
+  { "file": "terrain/지역/egypt_rgb.png",
+    "lonMin": 29.0, "lonMax": 35.0, "latMin": 22.0, "latMax": 32.0, "mPerPx": 200 }
+ ]
+}
+{
+ "encoding": "R*256+G, 미터 = 값 - 6000",
+ "tiles": [
+  {
    "file": "terrain/canaan.png",
    "w": 3000,
    "h": 3400,
