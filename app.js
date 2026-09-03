@@ -308,6 +308,19 @@ function placeSites() {
 let renderer, scene, camera, labelRoot;
 const SKY = 0x9dc0dc, HAZE = 0xc6d6e0;      // 하늘빛과 지평선 안개
 
+// 안개는 가까이서 볼 때 거리를 느끼게 하는 장치다. 그런데 짙기를 고정해 두면
+// 물러설수록 화면 전체가 안개에 잠겨 **온 세상이 뿌옇게** 된다 — 지도를 보러
+// 왔는데 안개를 보게 된다. 그래서 멀리 물러설수록 옅게 푼다.
+const terrainMats = [];
+function fogDenNow() {
+  return 0.0009 * Math.max(0.12, Math.min(1, 260 / Math.max(40, cam.dist)));
+}
+function syncFog() {
+  const v = fogDenNow();
+  if (scene && scene.fog) scene.fog.density = v;
+  for (const m of terrainMats) if (m.uniforms && m.uniforms.fogDen) m.uniforms.fogDen.value = v;
+}
+
 /** 위는 파랗고 아래로 갈수록 옅어지는 하늘 한 장 */
 function skyTexture() {
   const c = document.createElement('canvas');
@@ -396,7 +409,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       geo: { value: new THREE.Vector4(ORIGIN.lon, ORIGIN.lat, KM_LON, KM_LAT) },
       sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
       fogCol: { value: new THREE.Color(HAZE) },
-      fogDen: { value: 0.0009 },
+      fogDen: { value: fogDenNow() },
       // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
       clips: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -1, -1)) },
       nClip: { value: 0 }
@@ -533,6 +546,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         gl_FragColor = vec4(mix(col, fogCol, clamp(f, 0.0, 1.0)), 1.0);
       }`
   });
+  terrainMats.push(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   if (clip) setClips(mesh, Array.isArray(clip) ? clip : [clip]);
@@ -652,10 +666,49 @@ function updateDetail() {
 // ── 이름표 ────────────────────────────────────────────────
 const labelPool = [];
 let shown = [];
+// 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
+const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
 let highlight = null;
 let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
 
 function labelCap() { return innerWidth < 560 ? 44 : 110; }
+
+// ── 지명 상세도 — 앱과 같은 다섯 단계 ───────────────────────
+//
+// 0 아주 간단히 · 1 간단히 · 2 보통 · 3 자세히(기본) · 4 아주 자세히.
+// 등급마다 「얼마나 멀리서부터 보이는가」를 달리 주어, 낮은 단계에서는
+// 작은 마을이 아예 뜨지 않게 한다. 앱의 SiteBillboards 규칙 그대로다.
+const DETAILS = [
+  { ko: '아주 간단히', en: 'Minimal',  hintKo: '큰 도시만',
+    hintEn: 'Major cities only' },
+  { ko: '간단히',     en: 'Simple',   hintKo: '큰 도시와 큰 지형 이름만',
+    hintEn: 'Major cities and large landforms' },
+  { ko: '보통',       en: 'Normal',   hintKo: '여기에 성읍과 산 정상까지',
+    hintEn: 'Adds towns and mountain peaks' },
+  { ko: '자세히',     en: 'Detailed', hintKo: '작은 마을과 유적까지',
+    hintEn: 'Adds villages and ruins' },
+  { ko: '아주 자세히', en: 'Full',     hintKo: '성문과 샘까지 전부',
+    hintEn: 'Everything, down to gates and springs' }
+];
+let DETAIL = 3;
+try {
+  const v = parseInt(localStorage.getItem('theland.detail'), 10);
+  if (v >= 0 && v <= 4) DETAIL = v;
+} catch (e) {}
+
+function detailMul(rank) {
+  switch (rank) {
+    case 0:  return DETAIL >= 2 ? 1.25 : 1.7;
+    case 1:  return DETAIL >= 2 ? 1.00 : 0;
+    case 3:  return DETAIL >= 2 ? 0.85 : 0;
+    case 4:  return DETAIL >= 2 ? 1.8 : (DETAIL === 1 ? 1.2 : 0);
+    case 7:  return DETAIL >= 2 ? 1.8 : (DETAIL === 1 ? 1.2 : 0);
+    case 8:  return DETAIL >= 1 ? 2.4 : 0;
+    case 5: case 6: case 9: return 9.0;
+    case 10: return DETAIL >= 3 ? 0.55 : 0;
+    default: return DETAIL >= 4 ? 1.20 : (DETAIL === 3 ? 0.95 : 0);
+  }
+}
 
 // ── 테마 ──────────────────────────────────────────────────
 //
@@ -697,11 +750,17 @@ function updateLabels() {
   for (const s of SITES) {
     if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
     if (s.rank >= 10 && cam.dist > 12) continue;         // 성 안의 것은 가까이서만
-    if (s.rank >= 5 && s.rank <= 9 && cam.dist < 60) continue;
+    // 지파·민족·지역 이름은 넓은 땅의 이름이라 물러섰을 때만 뜬다.
+    // 산 · 산맥 · 골짜기 · 물길은 그렇지 않다 — 가까이서도 보여야 한다.
+    if ((s.rank === 5 || s.rank === 6 || s.rank === 9) && cam.dist < 60) continue;
+    if (s.rank === 5 && !areaShown('tribe', s.ko)) continue;
+    if (s.rank === 6 && !areaShown('nation', s.ko)) continue;
+    const mul = detailMul(s.rank);
+    if (mul <= 0) continue;
     v.set(s.x, s.y, s.z).project(camera);
     if (v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) continue;
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
-    if (d > cam.dist * 3.2 + 60) continue;
+    if (d > (cam.dist * 3.2 + 60) * mul) continue;
     cand.push({ s, sx: (v.x * .5 + .5) * innerWidth, sy: (-v.y * .5 + .5) * innerHeight, d,
                 score: s.rank * 1000 + d });
   }
@@ -734,8 +793,10 @@ function updateLabels() {
     const c = out[i], s = c.s;
     el._site = s;
     const has = byPlace.has(s.ko);
-    el.className = 'lab r' + s.rank + (highlight === s.ko ? ' on' : '');
-    el.innerHTML = (has ? '<i></i>' : '') + escapeHTML(L.cur === 'ko' ? s.ko : s.en);
+    const ref = s.rank < 4 && REFUGE.has(s.ko);
+    el.className = 'lab r' + s.rank + (ref ? ' refuge' : '') +
+                   (highlight === s.ko ? ' on' : '');
+    el.innerHTML = (ref || has ? '<i></i>' : '') + escapeHTML(L.cur === 'ko' ? s.ko : s.en);
     el.style.display = '';
     el.style.left = c.sx + 'px';
     el.style.top = c.sy + 'px';
@@ -774,6 +835,7 @@ function applyCam() {
   // 길은 세계 눈금으로 그리므로 멀어지면 실오라기가 되고 다가가면 밭두렁이 된다.
   // 배쯤 달라졌을 때만 다시 굽는다 — 끌 때마다 다시 만들 일은 아니다.
   if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.5) drawRoute();
+  syncFog();
   updateDetail();
   updateRegions();
   updateHUD();
@@ -1135,7 +1197,7 @@ document.getElementById('langBtn').onclick = () => {
   applyLang();
 };
 // 처음 단추에도 글자를 붙인다
-document.getElementById('homeBtn').innerHTML = '<i>⌂</i><u>' + '처음' + '</u>';
+document.getElementById('homeBtn').innerHTML = '<i>⌂</i><u>' + '예루살렘' + '</u>';
 document.getElementById('homeBtn').onclick = () => {
   const s = siteByName.get('예루살렘');
   if (s) flyTo(s, 260); else { cam.tx = 0; cam.tz = 0; cam.dist = 260; applyCam(); }
@@ -1145,7 +1207,7 @@ function applyLang() {
     L.cur === 'ko' ? '<i>EN</i><u>English</u>' : '<i>한</i><u>한국어</u>';
   document.documentElement.lang = L.cur;
   document.getElementById('homeBtn').innerHTML =
-    '<i>⌂</i><u>' + L.s('처음', 'Home') + '</u>';
+    '<i>⌂</i><u>' + L.s('예루살렘', 'Jerusalem') + '</u>';
   document.title = L.s('약속의 땅', 'The Promised Land');
   qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
                         'A place, a person, a word — or a whole line');
@@ -1405,7 +1467,7 @@ function tileBounds(t) {
   return new THREE.Vector4(x0, z0, worldX(t.lonMax) - x0, worldZ(t.latMin) - z0);
 }
 
-function drapeMaterial(color, opacity, lift, through) {
+function drapeMaterial(color, opacity, lift, through, fade) {
   return new THREE.ShaderMaterial({
     transparent: true, depthTest: through !== true, depthWrite: false,
     side: THREE.DoubleSide, polygonOffset: true,
@@ -1415,6 +1477,7 @@ function drapeMaterial(color, opacity, lift, through) {
       hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
       hasB: { value: hTexB ? 1 : 0 },
       vex: { value: VEXAG }, lift: { value: lift },
+      fadeOn: { value: fade ? 1 : 0 },
       tint: { value: new THREE.Color(color) }, alpha: { value: opacity }
     },
     vertexShader: [
@@ -1423,7 +1486,9 @@ function drapeMaterial(color, opacity, lift, through) {
       'uniform float hasB, vex, lift;',
       'attribute float edge;',
       'attribute float floorM;',
+      'attribute float fadeT;',
       'varying float vEdge;',
+      'varying float vFade;',
       'float dec(vec3 c){ return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0; }',
       'void main(){',
       '  vec3 p = position;',
@@ -1436,17 +1501,20 @@ function drapeMaterial(color, opacity, lift, through) {
       '    h = dec(texture2D(hB, clamp(ub, 0.001, 0.999)).rgb);',
       '  } else { h = 0.0; }',
       '  p.y = max(h, floorM) * 0.001 * vex + lift;',
-      '  vEdge = edge;',
+      '  vEdge = edge; vFade = fadeT;',
       '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
       '}'
     ].join('\n'),
     fragmentShader: [
-      'uniform vec3 tint; uniform float alpha;',
+      'uniform vec3 tint; uniform float alpha; uniform float fadeOn;',
       'varying float vEdge;',
+      'varying float vFade;',
       'void main(){',
       '  // 속은 꽉 차고 테두리만 또렷하게. 예전에는 가장자리로 갈수록',
       '  // 옅게 흩어져 길이 번진 자국처럼 보였다.',
       '  float a = alpha * (1.0 - smoothstep(0.76, 1.0, vEdge));',
+      '  // 첫머리와 끝머리는 스러지게 — 길이 허공에서 뚝 끊기지 않도록',
+      '  if (fadeOn > 0.5) a *= smoothstep(0.0, 0.045, vFade) * (1.0 - smoothstep(0.955, 1.0, vFade));',
       '  vec3 c = mix(tint, tint * 0.5, smoothstep(0.42, 0.88, vEdge));',
       '  if (a < 0.01) discard;',
       '  gl_FragColor = vec4(c, a);',
@@ -1458,18 +1526,22 @@ function drapeMaterial(color, opacity, lift, through) {
 /** 땅에 붙는 실 하나. 가운데가 진하고 가장자리는 스러진다. */
 function drapeLine(pts, widthKm, color, lift, opt) {
   opt = opt || {};
-  const pos = [], edge = [], flr = [], idx = [];
+  const pos = [], edge = [], flr = [], fdt = [], idx = [];
   const n = pts.length;
+  // 첫머리·끝머리를 스러지게 하려면 「어디쯤 왔는가」를 알아야 한다
+  const arc = [0];
+  for (let i = 1; i < n; i++) arc.push(arc[i - 1] + kmLL(pts[i - 1], pts[i]));
+  const total = arc[n - 1] || 1;
   for (let i = 0; i < n; i++) {
     const p = pts[i], q = pts[Math.min(i + 1, n - 1)], o = pts[Math.max(i - 1, 0)];
     let dx = worldX(q.lon) - worldX(o.lon), dz = worldZ(q.lat) - worldZ(o.lat);
     const len = Math.hypot(dx, dz) || 1;
     const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
     const x = worldX(p.lon), z = worldZ(p.lat);
-    const fl = floorMeters(p.lat, p.lon);
-    pos.push(x + nx, 0, z + nz);  edge.push(1); flr.push(fl);
-    pos.push(x, 0, z);            edge.push(0); flr.push(fl);
-    pos.push(x - nx, 0, z - nz);  edge.push(1); flr.push(fl);
+    const fl = floorMeters(p.lat, p.lon), ft = arc[i] / total;
+    pos.push(x + nx, 0, z + nz);  edge.push(1); flr.push(fl); fdt.push(ft);
+    pos.push(x, 0, z);            edge.push(0); flr.push(fl); fdt.push(ft);
+    pos.push(x - nx, 0, z - nz);  edge.push(1); flr.push(fl); fdt.push(ft);
     if (i < n - 1) {
       const a = i * 3, b = a + 3;
       idx.push(a, a+1, b,  a+1, b+1, b,  a+1, a+2, b+1,  a+2, b+2, b+1);
@@ -1479,8 +1551,9 @@ function drapeLine(pts, widthKm, color, lift, opt) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
   g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
+  g.setAttribute('fadeT', new THREE.Float32BufferAttribute(fdt, 1));
   g.setIndex(idx);
-  const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift, opt.through);
+  const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift, opt.through, opt.fade);
   drapeMats.push(mat);
   const m = new THREE.Mesh(g, mat);
   m.renderOrder = opt.order || 5;
@@ -1680,14 +1753,16 @@ const areaMesh = { tribe: null, nation: null };
 function drapeArea(ring, color, opacity) {
   const tri = earClip(ring);
   const pos = [], edge = [], flr = [], idx = [];
-  for (const p of ring) { pos.push(worldX(p[1]), 0, worldZ(p[0])); edge.push(0); flr.push(-30000); }
+  const fdt = [];
+  for (const p of ring) { pos.push(worldX(p[1]), 0, worldZ(p[0])); edge.push(0); flr.push(-30000); fdt.push(0.5); }
   for (const t of tri) idx.push(t[0], t[1], t[2]);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
   g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
+  g.setAttribute('fadeT', new THREE.Float32BufferAttribute(fdt, 1));
   g.setIndex(idx);
-  const mat = drapeMaterial(color, opacity, 0.006, false);
+  const mat = drapeMaterial(color, opacity, 0.006, false, false);
   drapeMats.push(mat);
   const m = new THREE.Mesh(g, mat);
   m.renderOrder = 2;
@@ -1695,28 +1770,44 @@ function drapeArea(ring, color, opacity) {
   return m;
 }
 
+// 어느 지파·민족을 띄울지. 비어 있으면 그 갈래를 통째로 본다는 뜻이다.
+const areaSel = { tribe: new Set(), nation: new Set() };
+try {
+  const sv = JSON.parse(localStorage.getItem('theland.areasel') || 'null');
+  if (sv) { (sv.tribe || []).forEach(n => areaSel.tribe.add(n));
+            (sv.nation || []).forEach(n => areaSel.nation.add(n)); }
+} catch (e) {}
+function saveAreaSel() {
+  try {
+    localStorage.setItem('theland.areasel', JSON.stringify(
+      { tribe: [...areaSel.tribe], nation: [...areaSel.nation] }));
+  } catch (e) {}
+}
+function areaShown(kind, ko) {
+  return areaSel[kind].size === 0 || areaSel[kind].has(ko);
+}
+
 function buildAreas(kind) {
   const list = kind === 'tribe' ? AREAS.tribes : AREAS.nations;
   const g = new THREE.Group();
   for (const a of list) {
     if (!a.poly || a.poly.length < 3) continue;
+    if (!areaShown(kind, a.ko)) continue;
     const c = new THREE.Color(a.color[0], a.color[1], a.color[2]);
-    // 땅빛을 덮지 않도록 옅게 — 경계가 보이면 그만이다
-    g.add(drapeArea(a.poly, c.getHex(), 0.34));
-    // 테두리를 한 줄 둘러 어디까지인지 또렷하게
-    const ring = a.poly.map(p => ({ lat: p[0], lon: p[1] }));
-    ring.push(ring[0]);
-    const line = drapeLine(smoothPath(ring, 0.6), 0.9, c.getHex(), 0.01,
-                           { opacity: 0.9, order: 3 });
-    g.add(line);
+    // 앱과 같이 **색으로만** 나눈다. 테두리를 두르니 지도가 아니라
+    // 색칠 공부처럼 보였다.
+    g.add(drapeArea(a.poly, c.getHex(), 0.38));
   }
   return g;
 }
 
-function syncAreas() {
+function syncAreas(force) {
   for (const kind of ['tribe', 'nation']) {
     const layer = LAYERS.find(l => l.k === kind);
     const want = !!(layer && layer.on);
+    if (force && areaMesh[kind]) {
+      scene.remove(areaMesh[kind]); disposeObj(areaMesh[kind]); areaMesh[kind] = null;
+    }
     if (want && !areaMesh[kind]) {
       areaMesh[kind] = buildAreas(kind);
       scene.add(areaMesh[kind]);
@@ -2045,7 +2136,7 @@ function toggleRoads() {
     const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 0.12);
     const wide = Math.max(0.30, cam.dist * 0.0013) * (r.rank === 0 ? 1.6 : 1);
     drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd9c8a4 : 0xc3b190, 0.012,
-              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 4 });
+              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 4, fade: true });
   }
   scene.add(roadsMesh);
   return true;
@@ -2149,7 +2240,7 @@ function addRivers() {
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
     drapeRuns(riverMesh, pts, Math.max(wide, dry ? 0.45 : 0.55),
               dry ? 0x4d87a6 : 0x2f6f95, 0.010,
-              { opacity: dry ? 0.55 : 0.8, order: 3 });
+              { opacity: dry ? 0.55 : 0.8, order: 3, fade: true });
   }
   // 가나안 바깥의 큰 강 — 나일·유프라테스·티그리스·오론테스·할리스…
   // 광역 지형은 화소가 커서 강바닥이 담기지 않는다. 그래서 애굽도
@@ -2159,7 +2250,11 @@ function addRivers() {
     if (!r.pts || r.pts.length < 2) continue;
     const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 0.8);
     const wide = Math.max(0.8, Math.min(4.0, (r.channelM || 200) / 420));
-    drapeRuns(riverMesh, pts, wide, 0x2f6f95, 0.010, { opacity: 0.86, order: 3 });
+    // 광역 판은 꼭짓점이 몇 km 씩 떨어져 있어, 골짜기를 가로지르는 면이
+    // 실제 강바닥보다 높이 걸린다. 그대로 두면 다가갈수록 강이 땅에
+    // 파묻혀 사라졌다 — 이 물줄기만은 땅에 가리지 않게 둔다.
+    drapeRuns(riverMesh, pts, wide, 0x2f6f95, 0.014,
+              { opacity: 0.86, order: 4, through: true, fade: true });
   }
   scene.add(riverMesh);
 }
@@ -2274,14 +2369,44 @@ function openLayers() {
   // 갈래마다 지금 지도에 몇 곳이 걸려 있는지도 함께 적어 준다
   const cnt = {};
   for (const s of SITES) cnt[s.rank] = (cnt[s.rank] || 0) + 1;
-  document.getElementById('pb').innerHTML = LAYERS.map(l => {
+  // 얼마나 자세히 — 앱과 같은 다섯 단계
+  let html = '<div class="note"><em>' + escapeHTML(L.s('얼마나 자세히', 'How much detail')) +
+    '</em><div class="dpick">' + DETAILS.map((d, i) =>
+      '<button data-detail="' + i + '"' + (i === DETAIL ? ' class="sel"' : '') + '>' +
+      escapeHTML(L.cur === 'ko' ? d.ko : d.en) + '</button>').join('') + '</div>' +
+    '<span class="dhint">' +
+    escapeHTML(L.cur === 'ko' ? DETAILS[DETAIL].hintKo : DETAILS[DETAIL].hintEn) +
+    '</span></div>';
+
+  html += LAYERS.map(l => {
     const n = l.ranks.reduce((a, r2) => a + (cnt[r2] || 0), 0);
-    return '<div class="lrow' + (l.on ? ' on' : '') + '" data-layer="' + l.k + '">' +
+    let row = '<div class="lrow' + (l.on ? ' on' : '') + '" data-layer="' + l.k + '">' +
       '<i>' + (l.on ? '●' : '○') + '</i>' +
       '<span><b>' + escapeHTML(L.cur === 'ko' ? l.ko : l.en) +
       '<u>' + n + escapeHTML(L.s('곳', '')) + '</u></b>' +
       escapeHTML(L.cur === 'ko' ? l.hintKo : l.hintEn) + '</span></div>';
+    // 지파·민족은 켜 두었을 때 낱낱이 고를 수 있다. 하나도 고르지 않으면 다 본다.
+    if ((l.k === 'tribe' || l.k === 'nation') && l.on) {
+      const list = l.k === 'tribe' ? AREAS.tribes : AREAS.nations;
+      if (list && list.length) {
+        row += '<div class="chips">' +
+          '<button class="chip' + (areaSel[l.k].size ? '' : ' sel') +
+          '" data-area="' + l.k + '" data-name="*">' +
+          escapeHTML(L.s('모두', 'All')) + '</button>' +
+          list.map(a => {
+            const c = a.color;
+            const rgb = 'rgb(' + Math.round(c[0]*255) + ',' + Math.round(c[1]*255) +
+                        ',' + Math.round(c[2]*255) + ')';
+            return '<button class="chip' + (areaSel[l.k].has(a.ko) ? ' sel' : '') +
+              '" data-area="' + l.k + '" data-name="' + escapeHTML(a.ko) + '">' +
+              '<s style="background:' + rgb + '"></s>' +
+              escapeHTML(L.place(a.ko)) + '</button>';
+          }).join('') + '</div>';
+      }
+    }
+    return row;
   }).join('');
+  document.getElementById('pb').innerHTML = html;
   panel.classList.add('open');
 }
 
@@ -2291,6 +2416,22 @@ const openGroups = new Set();
 
 const jgrpCSS = document.createElement('style');
 jgrpCSS.textContent =
+  // 얼마나 자세히 — 다섯 칸
+  '.dpick{display:flex;flex-wrap:wrap;gap:3px;margin:8px 0 6px}' +
+  '.dpick button{flex:1 1 auto;border:1px solid rgba(255,255,255,.14);' +
+  'background:none;color:#b9b1a3;cursor:pointer;font:600 11.5px/1 inherit;' +
+  'padding:0 6px;height:30px;border-radius:9px;white-space:nowrap}' +
+  '.dpick button.sel{background:rgba(253,204,97,.92);color:#231702;border-color:transparent}' +
+  '.dhint{display:block;color:#8d867a;font-size:11.5px}' +
+  // 지파·민족 낱낱이
+  '.chips{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 12px 26px}' +
+  '.chips .chip{display:inline-flex;align-items:center;gap:5px;cursor:pointer;' +
+  'border:1px solid rgba(255,255,255,.14);background:none;color:#b9b1a3;' +
+  'font:600 11.5px/1 inherit;padding:0 9px;height:28px;border-radius:14px}' +
+  '.chips .chip.sel{background:rgba(255,255,255,.14);color:#f2ece0;' +
+  'border-color:rgba(255,255,255,.3)}' +
+  '.chips .chip s{width:9px;height:9px;border-radius:3px;text-decoration:none;' +
+  'display:inline-block}' +
   '.jgrp{border-bottom:1px solid rgba(255,255,255,.07)}' +
   '.jgrp>summary{list-style:none;cursor:pointer;padding:13px 2px;display:flex;' +
   'align-items:center;gap:8px}' +
@@ -2381,10 +2522,26 @@ document.getElementById('pb').addEventListener('click', ev => {
       Math.round(km) + L.s(' km · ' + p.stops.length + '곳', ' km · ' + p.stops.length + ' stops');
     return;
   }
+  const dp = ev.target.closest('[data-detail]');
+  if (dp) {
+    DETAIL = +dp.dataset.detail;
+    try { localStorage.setItem('theland.detail', String(DETAIL)); } catch (e) {}
+    updateLabels(); openLayers();
+    return;
+  }
+  const ch = ev.target.closest('[data-area]');
+  if (ch) {
+    const kind = ch.dataset.area, nm = ch.dataset.name;
+    if (nm === '*') areaSel[kind].clear();
+    else if (areaSel[kind].has(nm)) areaSel[kind].delete(nm);
+    else areaSel[kind].add(nm);
+    saveAreaSel(); syncAreas(true); updateLabels(); openLayers();
+    return;
+  }
   const lr = ev.target.closest('.lrow');
   if (lr) {
     const l = LAYERS.find(x => x.k === lr.dataset.layer);
-    if (l) { l.on = !l.on; syncLayers(); syncAreas(); updateLabels(); openLayers(); }
+    if (l) { l.on = !l.on; syncLayers(); syncAreas(true); updateLabels(); openLayers(); }
     return;
   }
   const del = ev.target.dataset.del;
@@ -2408,11 +2565,16 @@ labSizeCSS.textContent =
   '.lab.r2{font-size:13.5px;font-weight:600}' +
   '.lab.r3{font-size:12.5px;font-weight:500}' +
   // 지형(산·산맥·골짜기)은 도시만큼 큰 것들이다. 작게 쓰면 안 보인다.
-  '.lab.r4,.lab.r8,.lab.r9{font-size:15px;font-weight:600;letter-spacing:.04em}' +
+  '.lab.r4,.lab.r8,.lab.r9{font-size:17px;font-weight:700;letter-spacing:.05em}' +
   // 지파와 민족은 넓은 땅 이름 — 더 크고 옅게
   '.lab.r5{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e6d3a8}' +
   '.lab.r6{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e0b9a0}' +
-  '.lab.r7{font-size:14px;font-weight:600;color:#a9cfe0;letter-spacing:.05em}' +
+  '.lab.r7{font-size:16px;font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
+  // 도피 도시 — 붉은 세모 (여호수아 20장의 여섯 성)
+  '.lab.refuge i{width:0;height:0;border-radius:0;background:none;' +
+  'border-left:5px solid transparent;border-right:5px solid transparent;' +
+  'border-bottom:9px solid #e03d2e;box-shadow:none;' +
+  'filter:drop-shadow(0 0 3px rgba(0,0,0,.6));vertical-align:0}' +
   // 손으로 고른 곳은 눈에 띄게 커진다
   '.lab.on{transform:translate(-50%,-50%) scale(1.5);z-index:3;' +
   'text-shadow:0 1px 4px #000,0 0 14px #000,0 0 22px rgba(0,0,0,.9)}' +
