@@ -1165,7 +1165,17 @@ function addViewButtons() {
     '#tools .btn{display:inline-flex;align-items:center;gap:5px;padding:9px 12px;white-space:nowrap}' +
     '#tools .btn i{font-style:normal;font-size:13px;opacity:.85}' +
     '#tools .btn u{text-decoration:none;font-size:12.5px;font-weight:600}' +
-    '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}';
+    // 폰에서는 한 줄에 다 들어가지 않는다. 찾기 칸을 위로 한 줄 빼고,
+    // 단추는 그림 아래에 이름을 붙여 작게 세운다 — 눌러 보지 않아도 알게.
+    '@media (max-width:660px){' +
+      '#top{flex-wrap:wrap;gap:6px;padding:8px}' +
+      '#search{flex:1 1 100%;max-width:none;order:0}' +
+      '#tools{order:1;flex:1 1 auto;flex-wrap:wrap;justify-content:space-around;gap:0}' +
+      '#qualPick{order:2}' +
+      '#tools .btn{flex-direction:column;gap:1px;padding:5px 6px;min-width:44px}' +
+      '#tools .btn u{display:block;font-size:9.5px;font-weight:600;letter-spacing:-.02em}' +
+      '#tools .btn i{font-size:15px;opacity:.95}' +
+    '}';
   document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
@@ -1437,6 +1447,12 @@ function laneVia(a, b) {
   const k = a + '\u0000' + b, k2 = b + '\u0000' + a;
   if (LANEMAP.has(k)) return LANEMAP.get(k);
   if (LANEMAP.has(k2)) return LANEMAP.get(k2).slice().reverse();
+  return null;
+}
+
+/** 딱 맞는 항로가 없을 때, 가까운 짝의 **굽이만** 빌린다.
+ *  옛길로 이을 수 있으면 그쪽이 낫다 — 그래서 이것은 마지막에만 쓴다. */
+function laneNear(a, b) {
   const sa = siteByName.get(a), sb = siteByName.get(b);
   if (!sa || !sb || kmLL(sa, sb) < 40) return null;
   let bd = 1e9, best = null;
@@ -1451,14 +1467,28 @@ function laneVia(a, b) {
   return best;
 }
 
-/** 옛길 위로 a 에서 b 까지. 길이 멀면 곧게 잇는다. */
+/** 옛길 위로 a 에서 b 까지. 길이 멀면 곧게 잇는다.
+ *
+ *  차례가 있다.
+ *    ① 지도에 이 두 곳을 잇는 굽이가 **그대로** 그려져 있으면 그것 (뱃길이 여기 든다)
+ *    ② 없으면 **옛길**을 따라간다 — 뭍에서는 이쪽이 맞다
+ *    ③ 옛길로도 못 이으면 그때 가까운 짝의 굽이를 빌린다
+ *  예전에는 ③을 ②보다 먼저 써서, 뭍길인데도 엉뚱한 뱃길의 굽이를 뒤집어쓰는
+ *  구간이 있었다. */
 function roadPath(a, b) {
-  // 지도에 그려진 굽이가 있으면 그것을 쓴다. 길찾기에 맡기면 뱃길이 바다를
-  // 피해 해안을 억지로 돌고, 곧게 두면 지도의 곡선과 어긋난다.
   const via = laneVia(a.ko, b.ko);
   if (via && via.length) return [a, ...via.map(p => ({ lat: p[0], lon: p[1] })), b];
+  const road = roadOnly(a, b);
+  if (road) return road;
+  const near = laneNear(a.ko, b.ko);
+  if (near && near.length) return [a, ...near.map(p => ({ lat: p[0], lon: p[1] })), b];
+  return [a, b];
+}
+
+/** 옛길만으로 이어 본다. 못 이으면 null. */
+function roadOnly(a, b) {
   const A = nearestNode(a), B = nearestNode(b);
-  if (A.km > 35 || B.km > 35 || A.i < 0 || B.i < 0) return [a, b];
+  if (A.km > 35 || B.km > 35 || A.i < 0 || B.i < 0) return null;
   const { n } = roadNet;
   const dist = new Float64Array(n.length).fill(Infinity);
   const prev = new Int32Array(n.length).fill(-1);
@@ -1471,7 +1501,7 @@ function roadPath(a, b) {
     done[u] = 1;
     for (const [v, w] of n[u].e) if (dist[u] + w < dist[v]) { dist[v] = dist[u] + w; prev[v] = u; }
   }
-  if (!isFinite(dist[B.i])) return [a, b];
+  if (!isFinite(dist[B.i])) return null;
   const mid = [];
   for (let i = B.i; i >= 0; i = prev[i]) mid.unshift({ lat: n[i].lat, lon: n[i].lon });
   return [a, ...mid, b];
@@ -2180,8 +2210,7 @@ function syncRunner() {
       'rgba(255,210,122,0) 64%);box-shadow:0 0 14px rgba(255,200,90,.8)}' +
       '#runner.on{display:block;animation:rpulse 1.4s ease-in-out infinite}' +
       '@keyframes rpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.28)}}' +
-      '#spdBtn{position:fixed;left:50%;bottom:124px;transform:translateX(-50%);' +
-      'z-index:26;display:none;align-items:center;gap:2px;padding:3px 4px 3px 11px;' +
+      '#spdBtn{display:none;align-items:center;gap:2px;padding:3px 4px 3px 11px;' +
       'border:1px solid rgba(255,255,255,.18);border-radius:21px;' +
       'background:rgba(20,20,24,.9)}' +
       '#spdBtn.on{display:flex}' +
@@ -2190,7 +2219,7 @@ function syncRunner() {
       '#spdBtn button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
       'font:700 12.5px/1 inherit;padding:0 10px;height:32px;border-radius:16px}' +
       '#spdBtn button.sel{background:#f2b64c;color:#231702}' +
-      '@media (max-width:560px){#spdBtn{bottom:134px;padding:3px 3px 3px 9px}' +
+      '@media (max-width:560px){#spdBtn{padding:3px 3px 3px 9px}' +
       '#spdBtn button{padding:0 8px;font-size:11.5px;height:30px}}';
     document.head.appendChild(st);
   }
@@ -2217,7 +2246,7 @@ function syncSpeedBtn() {
       speedIdx = +b.dataset.sp;
       syncSpeedBtn();
     });
-    document.body.appendChild(spdBtn);
+    dockEl().appendChild(spdBtn);
   }
   spdBtn.className = (routePts && routePts.length > 1) ? 'on' : '';
   spdBtn.title = L.s('걸음 빠르기', 'Travel speed');
@@ -2240,15 +2269,14 @@ function syncClrBtn() {
       if (panelIsRoutes && panel.classList.contains('open')) openRoutes();
       toast(L.s('경로를 지웠습니다', 'Route cleared'));
     });
-    document.body.appendChild(clrBtn);
+    actsEl().appendChild(clrBtn);
     const st = document.createElement('style');
     st.textContent =
-      '#clrBtn{position:fixed;left:50%;bottom:74px;margin-left:72px;z-index:26;' +
-      'display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
+      '#clrBtn{display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
       'padding:0 15px;height:42px;border-radius:21px;background:rgba(20,20,24,.9);' +
       'color:#f4c7bd;font:700 13px/1 inherit}' +
       '#clrBtn.on{display:block}' +
-      '@media (max-width:560px){#clrBtn{bottom:84px;margin-left:64px;padding:0 12px}}';
+      '@media (max-width:560px){#clrBtn{padding:0 12px;font-size:12.5px}}';
     document.head.appendChild(st);
   }
   clrBtn.className = (routeStops && routeStops.length) ? 'on' : '';
@@ -2266,17 +2294,15 @@ function syncGoBtn() {
       toast(following ? L.s('길을 따라갑니다', 'Travelling the route')
                       : L.s('멈췄습니다', 'Stopped'));
       if (panelIsRoutes && panel.classList.contains('open')) openRoutes(); });
-    document.body.appendChild(goBtn);
+    actsEl().appendChild(goBtn);
     const st = document.createElement('style');
     st.textContent =
-      '#goBtn{position:fixed;left:50%;bottom:74px;transform:translateX(-50%);z-index:26;' +
-      'display:none;align-items:center;gap:7px;border:0;cursor:pointer;' +
+      '#goBtn{display:none;align-items:center;gap:7px;border:0;cursor:pointer;' +
       'padding:0 20px;height:42px;border-radius:21px;background:#f2b64c;color:#231702;' +
       'font:700 14px/1 inherit;box-shadow:0 4px 18px rgba(0,0,0,.45)}' +
       '#goBtn.on{display:flex}' +
       '#goBtn.going{background:rgba(20,20,24,.9);color:#f2b64c;' +
-      'border:1px solid rgba(242,182,76,.6)}' +
-      '@media (max-width:560px){#goBtn{bottom:84px}}';
+      'border:1px solid rgba(242,182,76,.6)}';
     document.head.appendChild(st);
   }
   const has = !!(routePts && routePts.length > 1);
@@ -2320,6 +2346,35 @@ function updateStopMarks() {
     el.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
     el.style.top  = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
   }
+}
+
+// ── 화면 아래 단추 자리 ─────────────────────────────────────
+//
+// 빠르기 · 따라가기 · 경로 지우기 · 곳 카드를 저마다 「바닥에서 몇 픽셀」로
+// 띄워 두었더니, 폰에서는 서로 겹치고 「도착」이 아래로 흘러내렸다.
+// 이제 한 통에 담아 **세로로 쌓는다** — 무엇이 몇 개든 겹치지 않는다.
+let dockDiv = null, actsDiv = null;
+function dockEl() {
+  if (!dockDiv) {
+    dockDiv = document.createElement('div');
+    dockDiv.id = 'dock';
+    document.body.appendChild(dockDiv);
+    const st = document.createElement('style');
+    st.textContent =
+      '#dock{position:fixed;left:0;right:0;bottom:14px;z-index:26;display:flex;' +
+      'flex-direction:column;align-items:center;gap:8px;padding:0 10px;' +
+      'pointer-events:none}' +
+      '#dock>*{pointer-events:auto}' +
+      '#spdBtn{order:1}#acts{order:2}#card{order:3}' +
+      '#acts{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}' +
+      '@media (max-width:560px){#dock{bottom:10px;gap:6px}}';
+    document.head.appendChild(st);
+  }
+  return dockDiv;
+}
+function actsEl() {
+  if (!actsDiv) { actsDiv = document.createElement('div'); actsDiv.id = 'acts'; dockEl().appendChild(actsDiv); }
+  return actsDiv;
 }
 
 const markCSS = document.createElement('style');
@@ -2644,7 +2699,7 @@ function showCard(s) {
   if (!cardEl) {
     cardEl = document.createElement('div');
     cardEl.id = 'card';
-    document.body.appendChild(cardEl);
+    dockEl().appendChild(cardEl);
     onTap(cardEl, ev => {
       const slot = ev.target.dataset.slot;
       if (slot) { assign(cardSite, slot); return; }
@@ -2681,13 +2736,13 @@ function showCard(s) {
 
 const cardCSS = document.createElement('style');
 cardCSS.textContent =
-  '#card{position:fixed;left:50%;bottom:14px;transform:translate(-50%,120%);z-index:25;' +
-  'display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;' +
-  'row-gap:7px;max-width:min(620px,94vw);width:max-content;' +
+  '#card{display:none;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;' +
+  'row-gap:7px;max-width:min(620px,96vw);width:max-content;' +
   'padding:9px 8px 9px 14px;border-radius:15px;background:var(--panel);' +
   'border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);' +
-  'transition:transform .2s ease;opacity:0;pointer-events:none}' +
-  '#card.on{transform:translate(-50%,0);opacity:1;pointer-events:auto}' +
+  'pointer-events:none}' +
+  '#card.on{display:flex;pointer-events:auto;animation:cardIn .18s ease}' +
+  '@keyframes cardIn{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}' +
   '#cName{font:600 15px/1.25 Georgia,"Apple SD Gothic Neo",serif;color:var(--ink);cursor:pointer;' +
   'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}' +
   '#cInfo{border:1px solid rgba(253,204,97,.5);background:rgba(253,204,97,.12);' +
@@ -2953,7 +3008,7 @@ function toast(text) {
 }
 const toastCSS = document.createElement('style');
 toastCSS.textContent =
-  '.toast{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);z-index:40;' +
+  '.toast{position:fixed;left:50%;top:112px;transform:translateX(-50%);z-index:40;' +
   'max-width:min(520px,92vw);padding:10px 14px;border-radius:12px;background:var(--panel);' +
   'border:1px solid var(--line);color:var(--ink);font-size:12.5px;line-height:1.5;' +
   'backdrop-filter:blur(12px);transition:opacity .5s;text-align:center}';
