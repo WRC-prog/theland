@@ -229,6 +229,56 @@ async function loadAll() {
       dko: '1·2·3차 선교 여행과 로마로 가는 항해를 한 줄로',
       den: 'The first, second and third journeys and the voyage to Rome, in one line' }
   ];
+  for (const l of LANES) LANEMAP.set(l.a + '\u0000' + l.b, l.via);
+  I18N = i18n; TERRAIN = terrain;
+  REGIONS = terrain.regions || [];
+  ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
+  AREAS = areas || { tribes: [], nations: [] };
+  I18N = i18n;
+  BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
+
+  SITES = unpack(sites);
+  SITES.forEach((s, i) => { s.i = i; s.f = fold(s.ko) + '' + fold(s.en); siteByName.set(s.ko, s); });
+
+  const ERAS = events.eras, KINDS = events.kinds;
+  EVENTS = unpack(events);
+  for (const e of EVENTS) {
+    e.eraKo = ERAS[e.era]; e.kindKo = KINDS[e.kind];
+    e.f = fold(e.title + ' ' + e.ref + ' ' + e.text + ' ' + e.titleEn + ' ' + e.textEn);
+    if (!byPlace.has(e.place)) byPlace.set(e.place, []);
+    byPlace.get(e.place).push(e);
+  }
+  for (const n of unpack(notes)) NOTES.set(n.place, n);
+  // 물길에도 이름을 붙인다 — 앱처럼 골짜기와 급류가 지도에 보이게.
+  // 가운데 점을 자리로 삼아 지명 목록에 끼워 넣는다(등급 7 = 물길).
+  for (const wv of WAYS) {
+    if (!wv.pts || wv.pts.length < 2 || siteByName.has(wv.ko)) continue;
+    const mid = wv.pts[wv.pts.length >> 1];
+    const s = { ko: wv.ko, en: (I18N.place && I18N.place[wv.ko]) || wv.ko,
+                lat: mid[0], lon: mid[1], region: '물길', rank: 7 };
+    s.i = SITES.length; s.f = fold(s.ko) + '' + fold(s.en);
+    SITES.push(s); siteByName.set(s.ko, s);
+  }
+  // 자료가 다 선 뒤에 — 시대 이름표와 「전체 여정」·예수의 발자취를 세운다.
+  // (앞에서 세우면 뒤따르는 SITES = unpack(...) 가 통째로 덮어써 버린다)
+  // 시대 이름표를 다시 세운다.
+  //
+  // 예전에는 지파(5)와 나머지 셋이 한 등급(6)에 뭉쳐 있어, 족장 시대의 민족과
+  // 1세기의 갈릴리와 분열 왕국이 한 지도에 겹쳐 떴다. 눈이 어지러울 수밖에.
+  // 등급을 넷으로 가르고, 이름표는 areas.json 에서 새로 세운다.
+  SITES = SITES.filter(x => x.rank !== 5 && x.rank !== 6);
+  for (const kind in AREAKIND) {
+    for (const a of (AREAS[AREAKIND[kind]] || [])) {
+      AREACOLOR.set(kind + '\u0000' + a.ko, a.color);
+      const en = (I18N.place && I18N.place[a.ko]) || a.ko;
+      SITES.push({ ko: a.ko, en: en, lat: a.at[0], lon: a.at[1],
+                   region: kind === 'tribe' ? '지파' : kind === 'nation' ? '민족'
+                         : kind === 'first' ? '1세기' : '분열 왕국',
+                   rank: AREARANK[kind], era: kind });
+    }
+  }
+  SITES.forEach((x, i) => { x.i = i; if (!x.f) x.f = fold(x.ko) + '' + fold(x.en); });
+
   // 예수 그리스도의 발자취. 복음서에 적힌 대로 들른 곳을 차례로 이었다.
   // (지명은 이미 지도에 있는 것만 쓴다 — 없는 곳을 지어내지 않는다)
   const JESUS = [
@@ -292,53 +342,7 @@ async function loadAll() {
     PRESETS.push({ ko: w.ko, en: w.en, detailKo: w.dko, detailEn: w.den,
                    stops: stops, followTerrain: parts[0].followTerrain });
   }
-  for (const l of LANES) LANEMAP.set(l.a + '\u0000' + l.b, l.via);
-  I18N = i18n; TERRAIN = terrain;
-  REGIONS = terrain.regions || [];
-  ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
-  AREAS = areas || { tribes: [], nations: [] };
-  // 시대 이름표를 다시 세운다.
-  //
-  // 예전에는 지파(5)와 나머지 셋이 한 등급(6)에 뭉쳐 있어, 족장 시대의 민족과
-  // 1세기의 갈릴리와 분열 왕국이 한 지도에 겹쳐 떴다. 눈이 어지러울 수밖에.
-  // 등급을 넷으로 가르고, 이름표는 areas.json 에서 새로 세운다.
-  SITES = SITES.filter(x => x.rank !== 5 && x.rank !== 6);
-  for (const kind in AREAKIND) {
-    for (const a of (AREAS[AREAKIND[kind]] || [])) {
-      AREACOLOR.set(kind + '\u0000' + a.ko, a.color);
-      const en = (I18N.place && I18N.place[a.ko]) || a.ko;
-      SITES.push({ ko: a.ko, en: en, lat: a.at[0], lon: a.at[1],
-                   region: kind === 'tribe' ? '지파' : kind === 'nation' ? '민족'
-                         : kind === 'first' ? '1세기' : '분열 왕국',
-                   rank: AREARANK[kind], era: kind });
-    }
-  }
-  SITES.forEach((x, i) => { x.i = i; if (!x.f) x.f = fold(x.ko) + '' + fold(x.en); });
-  I18N = i18n;
-  BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
-  SITES = unpack(sites);
-  SITES.forEach((s, i) => { s.i = i; s.f = fold(s.ko) + '' + fold(s.en); siteByName.set(s.ko, s); });
-
-  const ERAS = events.eras, KINDS = events.kinds;
-  EVENTS = unpack(events);
-  for (const e of EVENTS) {
-    e.eraKo = ERAS[e.era]; e.kindKo = KINDS[e.kind];
-    e.f = fold(e.title + ' ' + e.ref + ' ' + e.text + ' ' + e.titleEn + ' ' + e.textEn);
-    if (!byPlace.has(e.place)) byPlace.set(e.place, []);
-    byPlace.get(e.place).push(e);
-  }
-  for (const n of unpack(notes)) NOTES.set(n.place, n);
-  // 물길에도 이름을 붙인다 — 앱처럼 골짜기와 급류가 지도에 보이게.
-  // 가운데 점을 자리로 삼아 지명 목록에 끼워 넣는다(등급 7 = 물길).
-  for (const wv of WAYS) {
-    if (!wv.pts || wv.pts.length < 2 || siteByName.has(wv.ko)) continue;
-    const mid = wv.pts[wv.pts.length >> 1];
-    const s = { ko: wv.ko, en: (I18N.place && I18N.place[wv.ko]) || wv.ko,
-                lat: mid[0], lon: mid[1], region: '물길', rank: 7 };
-    s.i = SITES.length; s.f = fold(s.ko) + '' + fold(s.en);
-    SITES.push(s); siteByName.set(s.ko, s);
-  }
   say('자료 ' + EVENTS.length + '건 · 지명 ' + SITES.length + '곳', 20);
 }
 
