@@ -2330,7 +2330,9 @@ function drapeArea(ring, color, opacity) {
   g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
   g.setAttribute('fadeT', new THREE.Float32BufferAttribute(fdt, 1));
   g.setIndex(idx);
-  const mat = drapeMaterial(color, opacity, 0.006, false, false);
+  // 땅빛을 **덮는** 색이다. 깊이를 견주면 산등성이가 색을 뚫고 올라와
+  // 지파·민족 땅이 산 밑으로 깔린 것처럼 보인다. 견주지 않고 덮는다.
+  const mat = drapeMaterial(color, opacity, 0.006, true, false);
   drapeMats.push(mat);
   const m = new THREE.Mesh(g, mat);
   m.renderOrder = 2;
@@ -3283,7 +3285,9 @@ function toast(text) {
   // 툴바가 폰에서는 두세 줄이 된다. 그 아래로 내려 놓는다.
   const top = document.getElementById('top');
   if (top) el.style.top = (top.getBoundingClientRect().height + 10) + 'px';
-  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 6000);
+  // 예전에는 여섯 초를 머물렀다. 「멈췄습니다」 한마디를 그렇게 오래
+  // 볼 까닭이 없다 — 눈에 들어올 만큼만 두고 곧 걷는다.
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 400); }, 2000);
 }
 // ── 지도만 보기 ────────────────────────────────────────────
 // 단추와 판을 통째로 감춘다. 감추는 단추 하나만 남는다.
