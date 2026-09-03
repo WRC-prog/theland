@@ -607,8 +607,13 @@ function applyWorldClips() {
 
 function updateRegions() {
   if (!REGIONS.length) return;
+  // 지역 판 하나가 십몇 MB 다. 여섯을 한꺼번에 부르면 폰이 숨을 못 쉰다.
+  //  · 한참 물러서서 볼 때는 620 m 짜리 세계 판으로 충분하다 — 부르지 않는다.
+  //  · 한 번에 하나씩만 받는다.
+  if (cam.dist > 900) return;
+  for (const v of regionLoaded.values()) if (v === 'loading') return;
   const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
-  const near = 1.0 + cam.dist / 111;          // 멀리서 볼수록 미리 챙긴다
+  const near = 0.5 + cam.dist / 200;          // 다가가는 쪽만 미리 챙긴다
   for (const t of REGIONS) {
     if (regionLoaded.has(t.file)) continue;
     if (lon < t.lonMin - near || lon > t.lonMax + near ||
@@ -631,6 +636,7 @@ function updateRegions() {
       scene.add(m);
       regionLoaded.set(t.file, m);
       worldClips.push(tileRect(t));
+      // 다음 판은 이 판을 다 세운 뒤에 (한 번에 하나씩)
       applyWorldClips();
       buildGrid(t, tex.image, Math.min(segX, 900), Math.min(segZ, 900));
       placeSites();
