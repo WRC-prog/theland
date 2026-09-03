@@ -112,6 +112,7 @@ async function loadAll() {
     loadJSON('data/waterways.json')
   ]);
   I18N = i18n; TERRAIN = terrain;
+  REGIONS = terrain.regions || [];
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
   I18N = i18n;
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
@@ -264,6 +265,24 @@ function initGL() {
 }
 
 /** 높이 그림 한 장을 지형 판으로 세운다 */
+/** 이 판에게 「여기는 그리지 마라」 하고 이르는 네모들 */
+function setClips(mesh, rects) {
+  const u = mesh.material.uniforms;
+  const n = Math.min(6, rects.length);
+  for (let i = 0; i < 6; i++) {
+    const r = i < n ? rects[i] : null;
+    if (r) u.clips.value[i].set(r.x, r.y, r.z, r.w);
+    else u.clips.value[i].set(0, 0, -1, -1);
+  }
+  u.nClip.value = n;
+}
+
+/** 타일 하나가 덮는 네모 (x0, z0, x1, z1) */
+function tileRect(t) {
+  return new THREE.Vector4(worldX(t.lonMin), worldZ(t.latMax),
+                           worldX(t.lonMax), worldZ(t.latMin));
+}
+
 function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const x0 = worldX(tile.lonMin), x1 = worldX(tile.lonMax);
   const z0 = worldZ(tile.latMax), z1 = worldZ(tile.latMin);   // 위도는 뒤집힌다
@@ -296,8 +315,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
       fogCol: { value: new THREE.Color(HAZE) },
       fogDen: { value: 0.0009 },
-      // 비워 둘 네모 (x0,z0,x1,z1). 뒤집힌 값이면 아무 데도 비우지 않는다.
-      clip: { value: clip || new THREE.Vector4(0, 0, -1, -1) }
+      // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
+      clips: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -1, -1)) },
+      nClip: { value: 0 }
     },
     vertexShader: `
       uniform sampler2D hmap;
@@ -325,7 +345,8 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       uniform vec3 fogCol;
       uniform float fogDen;
       uniform float vexf;
-      uniform vec4 clip;
+      uniform vec4 clips[6];
+      uniform int nClip;
       uniform vec2 mpp;      // 칸 하나가 덮는 실제 거리 (m) — 동서, 남북
       uniform vec4 geo;      // 기준 경도·위도와 1도의 km
       varying vec2 vUv;
@@ -392,9 +413,15 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
                    mix(height(b + vec2(0.0, texel.y)), height(b + texel), f.x), f.y);
       }
       void main(){
-        // 가나안 판이 맡은 자리는 넘기고 그리지 않는다 — 겹치면 서로 파고든다
-        if (vWorld.x > clip.x && vWorld.x < clip.z &&
-            vWorld.z > clip.y && vWorld.z < clip.w) discard;
+        // 더 촘촘한 판이 맡은 자리는 넘기고 그리지 않는다 — 겹치면 서로 파고든다.
+        // 지역 판이 하나씩 내려앉을 때마다 비울 네모가 늘어난다.
+        for (int i = 0; i < 6; i++) {
+          if (i < nClip) {
+            vec4 c = clips[i];
+            if (vWorld.x > c.x && vWorld.x < c.z &&
+                vWorld.z > c.y && vWorld.z < c.w) discard;
+          }
+        }
         float h  = hLin(vUv);
         float hl = hLin(vUv - vec2(texel.x, 0.0));
         float hr = hLin(vUv + vec2(texel.x, 0.0));
@@ -426,6 +453,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
+  if (clip) setClips(mesh, Array.isArray(clip) ? clip : [clip]);
   return mesh;
 }
 
@@ -452,13 +480,50 @@ function loadTexture(url) {
 // 켜 두면 한 손가락으로 끌 때 자리를 옮기지 않고 **고개만 돌린다** —
 // 높이는 그대로 두고 사방을 둘러볼 수 있다.
 let lookMode = false, lookBtn = null;
+// ── 지역 판 ──────────────────────────────────────────────
+//
+// 넓은 세계 한 장으로 지구의 8분의 1을 덮으니 620 m 로 뭉갤 수밖에 없었다.
+// 그래서 지역을 갈라 촘촘히 구워 두고, **카메라가 다가갈 때만 내려받는다.**
+// 처음 열 때는 가나안과 성긴 배경만 받으므로 여는 속도는 그대로다.
+let REGIONS = [], worldMesh = null, worldClips = [];
+const regionLoaded = new Map();
+
+function applyWorldClips() {
+  if (worldMesh) setClips(worldMesh, worldClips);
+}
+
+function updateRegions() {
+  if (!REGIONS.length) return;
+  const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
+  const near = 1.0 + cam.dist / 111;          // 멀리서 볼수록 미리 챙긴다
+  for (const t of REGIONS) {
+    if (regionLoaded.has(t.file)) continue;
+    if (lon < t.lonMin - near || lon > t.lonMax + near ||
+        lat < t.latMin - near || lat > t.latMax + near) continue;
+    regionLoaded.set(t.file, 'loading');
+    const segX = t.seg || 800;
+    const segZ = Math.max(80, Math.round(segX * (t.latMax - t.latMin) * KM_LAT
+                                              / ((t.lonMax - t.lonMin) * KM_LON)));
+    loadTexture(qualFile(t.file)).catch(() => loadTexture(t.file)).then(tex => {
+      const m = makeTerrain(t, segX, segZ, tex,
+                            canaanTile ? [tileRect(canaanTile)] : []);
+      m.renderOrder = -0.5;                   // 성긴 배경보다 위, 가나안보다 아래
+      scene.add(m);
+      regionLoaded.set(t.file, m);
+      worldClips.push(tileRect(t));
+      applyWorldClips();
+      buildGrid(t, tex.image, Math.min(segX, 900), Math.min(segZ, 900));
+      placeSites();
+    }).catch(() => { regionLoaded.delete(t.file); });
+  }
+}
+
 let baseCanaan = null, canaanTex = null, canaanTile = null;
 let detailMesh = null, detailWin = null;
 
 function setBaseClip(r) {
   if (!baseCanaan) return;
-  baseCanaan.material.uniforms.clip.value.set(
-    r ? r.x : 0, r ? r.z : 0, r ? r.x + r.w : -1, r ? r.z + r.d : -1);
+  setClips(baseCanaan, r ? [new THREE.Vector4(r.x, r.z, r.x + r.w, r.z + r.d)] : []);
 }
 
 function dropDetail() {
@@ -612,6 +677,7 @@ function applyCam() {
   // 배쯤 달라졌을 때만 다시 굽는다 — 끌 때마다 다시 만들 일은 아니다.
   if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.5) drawRoute();
   updateDetail();
+  updateRegions();
   updateHUD();
 }
 
@@ -1929,9 +1995,7 @@ function tick() {
     canaanTex = texC; canaanTile = canaan;
     hTexA = texC; hBoundA = tileBounds(canaan);
     scene.add(baseCanaan);
-    const canaanClip = new THREE.Vector4(
-      worldX(canaan.lonMin), worldZ(canaan.latMax),
-      worldX(canaan.lonMax), worldZ(canaan.latMin));
+    const canaanClip = tileRect(canaan);
 
     addLakes();
     bindControls();
@@ -1965,6 +2029,8 @@ function tick() {
       hTexB = texR; hBoundB = tileBounds(region);
       const m = makeTerrain(region, 1000, 540, texR, canaanClip);
         m.renderOrder = -1;
+        worldMesh = m; worldClips = [canaanClip];
+        applyWorldClips();
         scene.add(m);
         setTimeout(() => {
           buildGrid(region, texR.image, 420, 240);
