@@ -92,7 +92,7 @@ async function setQual(q) {
   try { localStorage.setItem('theland.qual', q); } catch (e) {}
   const old = QUAL;
   QUAL = q;
-  if (qualBtn) qualBtn.innerHTML = '<i>◍</i><u>' + L.s('화질 ', 'Detail ') + QUAL_NAME()[q] + '</u>';
+  syncQualBtn();
   toast(L.s('지형을 ' + QUAL_NAME()[q] + ' 화질로 바꾸는 중…',
             'Switching terrain to ' + QUAL_NAME()[q] + '…'));
   try {
@@ -125,12 +125,21 @@ async function setQual(q) {
     toast(L.s('화질 ' + QUAL_NAME()[q], 'Detail: ' + QUAL_NAME()[q]));
   } catch (e) {
     QUAL = old;
-    if (qualBtn) qualBtn.innerHTML = '<i>◍</i><u>' + L.s('화질 ', 'Detail ') + QUAL_NAME()[old] + '</u>';
+    syncQualBtn();
     toast(L.s('그 화질의 지형이 아직 없습니다', 'That level is not available yet'));
   }
   qualBusy = false;
+  syncQualBtn();
 }
 let qualBusy = false, qualBtn = null;
+function syncQualBtn() {
+  if (!qualBtn) return;
+  const nm = QUAL_NAME();
+  qualBtn.innerHTML = '<i>' + escapeHTML(L.s('화질', 'Detail')) + '</i>' +
+    QUALS.map(q => '<button data-q="' + q + '"' +
+      (q === QUAL ? ' class="sel"' : '') + (qualBusy ? ' disabled' : '') +
+      '>' + escapeHTML(nm[q]) + '</button>').join('');
+}
 function QUAL_NAME() {
   return { low: L.s('하', 'Low'), mid: L.s('중', 'Mid'), hi: L.s('상', 'High') };
 }
@@ -141,6 +150,9 @@ function qualFile(f) {
 }
 
 let SITES = [], EVENTS = [], NOTES = new Map(), I18N = null, TERRAIN = null;
+// 가나안 바깥의 큰 강 · 지도에 그려진 항로의 굽이 · 여정의 주제 묶음
+let BIGRIVERS = [], LANES = [], JGROUPS = [];
+const LANEMAP = new Map();
 let byPlace = new Map();          // 지명 → 사건들
 let siteByName = new Map();
 
@@ -162,7 +174,8 @@ function unpack(o) {                       // {cols, rows} → 객체 배열
 
 async function loadAll() {
   say('자료를 불러오는 중…', 5);
-  const [sites, events, notes, i18n, terrain, roads, presets, ways, areas] = await Promise.all([
+  const [sites, events, notes, i18n, terrain, roads, presets, ways, areas,
+         bigrivers, lanes, jgroups] = await Promise.all([
     loadJSON('data/sites.json'),
     loadJSON('data/events.json'),
     loadJSON('data/notes.json'),
@@ -171,8 +184,14 @@ async function loadAll() {
     loadJSON('data/roads.json'),
     loadJSON('data/presets.json'),
     loadJSON('data/waterways.json'),
-    loadJSON('data/areas.json').catch(() => ({ tribes: [], nations: [] }))
+    loadJSON('data/areas.json').catch(() => ({ tribes: [], nations: [] })),
+    loadJSON('data/rivers.json').catch(() => ({ cols: [], rows: [] })),
+    loadJSON('data/lanes.json').catch(() => ({ cols: [], rows: [] })),
+    loadJSON('data/journeygroups.json').catch(() => ({ groups: [] }))
   ]);
+  BIGRIVERS = unpack(bigrivers); LANES = unpack(lanes);
+  JGROUPS = (jgroups && jgroups.groups) || [];
+  for (const l of LANES) LANEMAP.set(l.a + '\u0000' + l.b, l.via);
   I18N = i18n; TERRAIN = terrain;
   REGIONS = terrain.regions || [];
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
@@ -941,12 +960,32 @@ function addViewButtons() {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
-  qualBtn = mk(tag('◍', L.s('화질 ', 'Detail ') + QUAL_NAME()[QUAL]),
-    L.s('지형을 얼마나 자세히 그릴지', 'How detailed the land is'), () => {
-    // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
-    setQual(QUALS[(QUALS.indexOf(QUAL) + 1) % 3]);
+  // 화질도 돌려 가며 누르는 것이 아니라 **바로 고르는** 것이다 —
+  // 하에서 상으로 한 번에 갈 수 있어야 한다.
+  // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
+  qualBtn = document.createElement('div');
+  qualBtn.id = 'qualPick';
+  qualBtn.className = 'card';
+  qualBtn.title = L.s('지형을 얼마나 자세히 그릴지', 'How detailed the land is');
+  qualBtn.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-q]');
+    if (b && b.dataset.q !== QUAL) setQual(b.dataset.q);
   });
-  qualBtn.style.fontWeight = '700';
+  tools.parentNode.insertBefore(qualBtn, tools);
+  syncQualBtn();
+  const qCSS = document.createElement('style');
+  qCSS.textContent =
+    '#qualPick{display:inline-flex;align-items:center;gap:2px;padding:3px 4px 3px 10px;' +
+    'border-radius:12px}' +
+    '#qualPick>i{font-style:normal;font-size:12.5px;font-weight:600;opacity:.8;' +
+    'margin-right:4px;white-space:nowrap}' +
+    '#qualPick button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
+    'font:700 12.5px/1 inherit;padding:0 9px;height:30px;border-radius:15px}' +
+    '#qualPick button.sel{background:rgba(253,204,97,.92);color:#231702}' +
+    '#qualPick button[disabled]{opacity:.45;cursor:default}' +
+    '@media (max-width:700px){#qualPick{padding:3px}#qualPick>i{display:none}' +
+    '#qualPick button{padding:0 7px;font-size:11.5px}}';
+  document.head.appendChild(qCSS);
 
   // 데이터로 들어온 듯하면 한 번만 알려 준다
   if (qualAuto && QUAL === 'low') toast(L.s(
@@ -1167,8 +1206,35 @@ function nearestNode(p) {
   return { i: bi, km: bd };
 }
 
+/** 두 곳을 잇는 항로·발자취가 지도에 그려져 있으면 그 사이 점들을 돌려준다.
+ *
+ *  딱 맞는 짝이 없으면 **가까운 짝**의 굽이만 빌린다 — 발자취는 지도가 그려 둔
+ *  지점을 그대로 밟지 않기 때문이다. 두 끝점은 원래 자리를 쓰므로 경로가
+ *  엉뚱한 데서 시작하거나 끝나지 않는다. (앱의 laneVia 와 같다) */
+function laneVia(a, b) {
+  const k = a + '\u0000' + b, k2 = b + '\u0000' + a;
+  if (LANEMAP.has(k)) return LANEMAP.get(k);
+  if (LANEMAP.has(k2)) return LANEMAP.get(k2).slice().reverse();
+  const sa = siteByName.get(a), sb = siteByName.get(b);
+  if (!sa || !sb || kmLL(sa, sb) < 40) return null;
+  let bd = 1e9, best = null;
+  for (const l of LANES) {
+    const la = siteByName.get(l.a), lb = siteByName.get(l.b);
+    if (!la || !lb) continue;
+    const fwd = Math.max(kmLL(sa, la), kmLL(sb, lb));
+    if (fwd <= 110 && fwd < bd) { bd = fwd; best = l.via; }
+    const rev = Math.max(kmLL(sa, lb), kmLL(sb, la));
+    if (rev <= 110 && rev < bd) { bd = rev; best = l.via.slice().reverse(); }
+  }
+  return best;
+}
+
 /** 옛길 위로 a 에서 b 까지. 길이 멀면 곧게 잇는다. */
 function roadPath(a, b) {
+  // 지도에 그려진 굽이가 있으면 그것을 쓴다. 길찾기에 맡기면 뱃길이 바다를
+  // 피해 해안을 억지로 돌고, 곧게 두면 지도의 곡선과 어긋난다.
+  const via = laneVia(a.ko, b.ko);
+  if (via && via.length) return [a, ...via.map(p => ({ lat: p[0], lon: p[1] })), b];
   const A = nearestNode(a), B = nearestNode(b);
   if (A.km > 35 || B.km > 35 || A.i < 0 || B.i < 0) return [a, b];
   const { n } = roadNet;
@@ -1212,6 +1278,50 @@ function smoothPath(pts, stepKm) {
 }
 
 /** 이 점이 어느 호수 안인가 — 길이 물 위를 지나가지 않게 */
+/** 대해의 물가 — 지형 셰이더가 쓰는 것과 같은 어림선 */
+function coastLonJS(la) {
+  const mx = (a, b, t) => a + (b - a) * Math.min(1, Math.max(0, t));
+  if (la < 31.29) return mx(33.900, 34.230, (la - 31.05) / 0.24);
+  if (la < 31.80) return mx(34.230, 34.620, (la - 31.29) / 0.51);
+  if (la < 32.33) return mx(34.620, 34.840, (la - 31.80) / 0.53);
+  if (la < 32.72) return mx(34.840, 34.935, (la - 32.33) / 0.39);
+  if (la < 32.95) return mx(34.935, 35.074, (la - 32.72) / 0.23);
+  if (la < 33.27) return mx(35.074, 35.190, (la - 32.95) / 0.32);
+  return mx(35.190, 35.390, (la - 33.27) / 0.33);
+}
+
+/** 이 자리의 호수 수면 높이(m). 호수 밖이면 null. */
+function lakeLevel(lat, lon) {
+  for (const l of LAKES) {
+    let inside = false; const r = l.ring;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++)
+      if ((r[i][0] > lat) !== (r[j][0] > lat) &&
+          lon < (r[j][1] - r[i][1]) * (lat - r[i][0]) / (r[j][0] - r[i][0]) + r[i][1]) inside = !inside;
+    if (inside) return l.level;
+  }
+  return null;
+}
+
+/** 길이 이 자리에서 딛는 **가장 낮은 높이**(m).
+ *
+ *  바다 위를 지나는 뱃길이 해저 등고를 따라 오르내리면 배가 물속을 기어가는
+ *  꼴이 된다. 앱은 siteGroundMeters 에서 max(땅, 수면) 을 쓴다 — 물 위에서는
+ *  수면을 밟는다. 여기서도 같게 한다.
+ *
+ *  다만 해수면보다 낮아도 **마른 땅**인 곳이 있다 — 요르단 지구대, 아라바,
+ *  카타라 저지. 거기서는 땅을 그대로 밟아야 한다. */
+function floorMeters(lat, lon) {
+  const lv = lakeLevel(lat, lon);
+  if (lv != null) return lv;
+  const h = groundY(lat, lon) / (0.001 * VEXAG);
+  if (h >= 0) return -30000;
+  if (lat > 31.05 && lat < 33.75 && lon > 34.20 && lon < 36.30
+      && lon > coastLonJS(lat) + 0.06) return -30000;
+  if (lat > 29.62 && lat <= 31.05 && lon > 34.95 && lon < 35.80) return -30000;
+  if (lat > 28.30 && lat < 30.60 && lon > 25.80 && lon < 29.60) return -30000;
+  return 0;
+}
+
 function inLake(lat, lon) {
   for (const l of LAKES) {
     let inside = false, r = l.ring;
@@ -1312,6 +1422,7 @@ function drapeMaterial(color, opacity, lift, through) {
       'uniform sampler2D hB; uniform vec4 bB;',
       'uniform float hasB, vex, lift;',
       'attribute float edge;',
+      'attribute float floorM;',
       'varying float vEdge;',
       'float dec(vec3 c){ return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0; }',
       'void main(){',
@@ -1324,7 +1435,7 @@ function drapeMaterial(color, opacity, lift, through) {
       '    vec2 ub = vec2((p.x - bB.x) / bB.z, 1.0 - (p.z - bB.y) / bB.w);',
       '    h = dec(texture2D(hB, clamp(ub, 0.001, 0.999)).rgb);',
       '  } else { h = 0.0; }',
-      '  p.y = h * 0.001 * vex + lift;',
+      '  p.y = max(h, floorM) * 0.001 * vex + lift;',
       '  vEdge = edge;',
       '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
       '}'
@@ -1333,10 +1444,12 @@ function drapeMaterial(color, opacity, lift, through) {
       'uniform vec3 tint; uniform float alpha;',
       'varying float vEdge;',
       'void main(){',
-      '  // 가장자리로 갈수록 스러지게 — 칼로 자른 띠가 아니라 실처럼',
-      '  float a = alpha * (1.0 - vEdge * vEdge);',
+      '  // 속은 꽉 차고 테두리만 또렷하게. 예전에는 가장자리로 갈수록',
+      '  // 옅게 흩어져 길이 번진 자국처럼 보였다.',
+      '  float a = alpha * (1.0 - smoothstep(0.76, 1.0, vEdge));',
+      '  vec3 c = mix(tint, tint * 0.5, smoothstep(0.42, 0.88, vEdge));',
       '  if (a < 0.01) discard;',
-      '  gl_FragColor = vec4(tint, a);',
+      '  gl_FragColor = vec4(c, a);',
       '}'
     ].join('\n')
   });
@@ -1345,7 +1458,7 @@ function drapeMaterial(color, opacity, lift, through) {
 /** 땅에 붙는 실 하나. 가운데가 진하고 가장자리는 스러진다. */
 function drapeLine(pts, widthKm, color, lift, opt) {
   opt = opt || {};
-  const pos = [], edge = [], idx = [];
+  const pos = [], edge = [], flr = [], idx = [];
   const n = pts.length;
   for (let i = 0; i < n; i++) {
     const p = pts[i], q = pts[Math.min(i + 1, n - 1)], o = pts[Math.max(i - 1, 0)];
@@ -1353,9 +1466,10 @@ function drapeLine(pts, widthKm, color, lift, opt) {
     const len = Math.hypot(dx, dz) || 1;
     const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
     const x = worldX(p.lon), z = worldZ(p.lat);
-    pos.push(x + nx, 0, z + nz);  edge.push(1);
-    pos.push(x, 0, z);            edge.push(0);
-    pos.push(x - nx, 0, z - nz);  edge.push(1);
+    const fl = floorMeters(p.lat, p.lon);
+    pos.push(x + nx, 0, z + nz);  edge.push(1); flr.push(fl);
+    pos.push(x, 0, z);            edge.push(0); flr.push(fl);
+    pos.push(x - nx, 0, z - nz);  edge.push(1); flr.push(fl);
     if (i < n - 1) {
       const a = i * 3, b = a + 3;
       idx.push(a, a+1, b,  a+1, b+1, b,  a+1, a+2, b+1,  a+2, b+2, b+1);
@@ -1364,6 +1478,7 @@ function drapeLine(pts, widthKm, color, lift, opt) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
+  g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
   g.setIndex(idx);
   const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift, opt.through);
   drapeMats.push(mat);
@@ -1466,6 +1581,7 @@ function chevronMaterial(lift, period) {
       'uniform sampler2D hB; uniform vec4 bB;',
       'uniform float hasB, vex, lift, period;',
       'attribute vec2 uv2;',
+      'attribute float floorM;',
       'varying vec2 vT;',
       'float dec(vec3 c){ return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0; }',
       'void main(){',
@@ -1478,7 +1594,7 @@ function chevronMaterial(lift, period) {
       '    vec2 ub = vec2((p.x - bB.x) / bB.z, 1.0 - (p.z - bB.y) / bB.w);',
       '    h = dec(texture2D(hB, clamp(ub, 0.001, 0.999)).rgb);',
       '  } else { h = 0.0; }',
-      '  p.y = h * 0.001 * vex + lift;',
+      '  p.y = max(h, floorM) * 0.001 * vex + lift;',
       '  vT = vec2(uv2.x / period, uv2.y);',
       '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
       '}'
@@ -1497,7 +1613,7 @@ function chevronMaterial(lift, period) {
 
 /** 갈매기표 띠 하나 */
 function chevronRibbon(pts, widthKm, lift) {
-  const pos = [], uv2 = [], idx = [];
+  const pos = [], uv2 = [], flr = [], idx = [];
   let arc = 0;
   for (let i = 0; i < pts.length; i++) {
     if (i) arc += kmLL(pts[i - 1], pts[i]);
@@ -1506,13 +1622,15 @@ function chevronRibbon(pts, widthKm, lift) {
     const len = Math.hypot(dx, dz) || 1;
     const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
     const x = worldX(p.lon), z = worldZ(p.lat);
-    pos.push(x + nx, 0, z + nz); uv2.push(arc, 0);
-    pos.push(x - nx, 0, z - nz); uv2.push(arc, 1);
+    const fl = floorMeters(p.lat, p.lon);
+    pos.push(x + nx, 0, z + nz); uv2.push(arc, 0); flr.push(fl);
+    pos.push(x - nx, 0, z - nz); uv2.push(arc, 1); flr.push(fl);
     if (i < pts.length - 1) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv2', new THREE.Float32BufferAttribute(uv2, 2));
+  g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
   g.setIndex(idx);
   // 앱과 같은 되풀이 간격 — 너비의 2.4 배마다 갈매기표 두 개
   const cmat = chevronMaterial(lift, Math.max(widthKm * 2.4, 1e-4));
@@ -1561,12 +1679,13 @@ const areaMesh = { tribe: null, nation: null };
 
 function drapeArea(ring, color, opacity) {
   const tri = earClip(ring);
-  const pos = [], edge = [], idx = [];
-  for (const p of ring) { pos.push(worldX(p[1]), 0, worldZ(p[0])); edge.push(0); }
+  const pos = [], edge = [], flr = [], idx = [];
+  for (const p of ring) { pos.push(worldX(p[1]), 0, worldZ(p[0])); edge.push(0); flr.push(-30000); }
   for (const t of tri) idx.push(t[0], t[1], t[2]);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
+  g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
   g.setIndex(idx);
   const mat = drapeMaterial(color, opacity, 0.006, false);
   drapeMats.push(mat);
@@ -1626,12 +1745,18 @@ function syncRunner() {
       'rgba(255,210,122,0) 64%);box-shadow:0 0 14px rgba(255,200,90,.8)}' +
       '#runner.on{display:block;animation:rpulse 1.4s ease-in-out infinite}' +
       '@keyframes rpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.28)}}' +
-      '#spdBtn{position:fixed;left:50%;bottom:74px;margin-left:96px;z-index:26;' +
-      'display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
-      'padding:0 13px;height:42px;border-radius:21px;background:rgba(20,20,24,.9);' +
-      'color:var(--ink);font:700 13px/1 inherit}' +
-      '#spdBtn.on{display:block}' +
-      '@media (max-width:560px){#spdBtn{bottom:84px;margin-left:88px}}';
+      '#spdBtn{position:fixed;left:50%;bottom:124px;transform:translateX(-50%);' +
+      'z-index:26;display:none;align-items:center;gap:2px;padding:3px 4px 3px 11px;' +
+      'border:1px solid rgba(255,255,255,.18);border-radius:21px;' +
+      'background:rgba(20,20,24,.9)}' +
+      '#spdBtn.on{display:flex}' +
+      '#spdBtn>i{font-style:normal;font-size:12px;color:#b9b1a3;font-weight:600;' +
+      'margin-right:4px}' +
+      '#spdBtn button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
+      'font:700 12.5px/1 inherit;padding:0 10px;height:32px;border-radius:16px}' +
+      '#spdBtn button.sel{background:#f2b64c;color:#231702}' +
+      '@media (max-width:560px){#spdBtn{bottom:134px;padding:3px 3px 3px 9px}' +
+      '#spdBtn button{padding:0 8px;font-size:11.5px;height:30px}}';
     document.head.appendChild(st);
   }
   if (!following || !routePts) { runnerEl.className = ''; return; }
@@ -1644,20 +1769,55 @@ function syncRunner() {
   runnerEl.style.top = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
 }
 
+// 빠르기는 **바로 고르는** 것이다. 예전에는 한 번 누를 때마다 다음 칸으로
+// 넘어가서, 가운데에서 처음으로 돌아가려면 끝까지 한 바퀴를 돌아야 했다.
 let spdBtn = null;
 function syncSpeedBtn() {
   if (!spdBtn) {
-    spdBtn = document.createElement('button');
+    spdBtn = document.createElement('div');
     spdBtn.id = 'spdBtn';
-    spdBtn.addEventListener('click', () => {
-      speedIdx = (speedIdx + 1) % SPEEDS.length;
+    spdBtn.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-sp]');
+      if (!b) return;
+      speedIdx = +b.dataset.sp;
       syncSpeedBtn();
     });
     document.body.appendChild(spdBtn);
   }
   spdBtn.className = (routePts && routePts.length > 1) ? 'on' : '';
-  spdBtn.textContent = '×' + SPEEDS[speedIdx];
   spdBtn.title = L.s('걸음 빠르기', 'Travel speed');
+  spdBtn.innerHTML = '<i>' + escapeHTML(L.s('빠르기', 'Speed')) + '</i>' +
+    SPEEDS.map((v, i) => '<button data-sp="' + i + '"' +
+      (i === speedIdx ? ' class="sel"' : '') + '>\u00d7' + v + '</button>').join('');
+}
+
+// 길 전체를 한 번에 물린다. 판을 열지 않고도 지울 수 있어야 한다.
+let clrBtn = null;
+function syncClrBtn() {
+  if (!clrBtn) {
+    clrBtn = document.createElement('button');
+    clrBtn.id = 'clrBtn';
+    clrBtn.addEventListener('click', () => {
+      plan.start = null; plan.end = null; plan.via = [];
+      clearRoute();
+      updateStopMarks(); updateLabels();
+      if (cardSite) showCard(cardSite);
+      if (panelIsRoutes && panel.classList.contains('open')) openRoutes();
+      toast(L.s('경로를 지웠습니다', 'Route cleared'));
+    });
+    document.body.appendChild(clrBtn);
+    const st = document.createElement('style');
+    st.textContent =
+      '#clrBtn{position:fixed;left:50%;bottom:74px;margin-left:72px;z-index:26;' +
+      'display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
+      'padding:0 15px;height:42px;border-radius:21px;background:rgba(20,20,24,.9);' +
+      'color:#f4c7bd;font:700 13px/1 inherit}' +
+      '#clrBtn.on{display:block}' +
+      '@media (max-width:560px){#clrBtn{bottom:84px;margin-left:64px;padding:0 12px}}';
+    document.head.appendChild(st);
+  }
+  clrBtn.className = (routeStops && routeStops.length) ? 'on' : '';
+  clrBtn.textContent = L.s('\u2715 경로 지우기', '\u2715 Clear route');
 }
 
 // 길이 서면 지도 위에 바로 뜨는 단추. 판을 열고 또 누를 까닭이 없다.
@@ -1689,6 +1849,7 @@ function syncGoBtn() {
 function updateStopMarks() {
   syncGoBtn();
   syncSpeedBtn();
+  syncClrBtn();
   syncRunner();
   const need = routeStops.length;
   while (markPool.length < need) {
@@ -1990,6 +2151,16 @@ function addRivers() {
               dry ? 0x4d87a6 : 0x2f6f95, 0.010,
               { opacity: dry ? 0.55 : 0.8, order: 3 });
   }
+  // 가나안 바깥의 큰 강 — 나일·유프라테스·티그리스·오론테스·할리스…
+  // 광역 지형은 화소가 커서 강바닥이 담기지 않는다. 그래서 애굽도
+  // 메소포타미아도 소아시아도 물 한 줄기 없이 말라 있었다. 앱이 그러듯
+  // 물줄기를 따로 그어 준다 — 굵기는 앱이 쓰는 강폭을 그대로 따른다.
+  for (const r of BIGRIVERS) {
+    if (!r.pts || r.pts.length < 2) continue;
+    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 0.8);
+    const wide = Math.max(0.8, Math.min(4.0, (r.channelM || 200) / 420));
+    drapeRuns(riverMesh, pts, wide, 0x2f6f95, 0.010, { opacity: 0.86, order: 3 });
+  }
   scene.add(riverMesh);
 }
 
@@ -2115,6 +2286,33 @@ function openLayers() {
 }
 
 let panelIsRoutes = false;
+// 어느 주제를 펼쳐 두었는지 기억한다 — 판을 다시 그려도 접히지 않게.
+const openGroups = new Set();
+
+const jgrpCSS = document.createElement('style');
+jgrpCSS.textContent =
+  '.jgrp{border-bottom:1px solid rgba(255,255,255,.07)}' +
+  '.jgrp>summary{list-style:none;cursor:pointer;padding:13px 2px;display:flex;' +
+  'align-items:center;gap:8px}' +
+  '.jgrp>summary::-webkit-details-marker{display:none}' +
+  '.jgrp>summary::before{content:"\u203a";font-size:17px;color:#8d867a;' +
+  'transition:transform .16s;display:inline-block;width:10px}' +
+  '.jgrp[open]>summary::before{transform:rotate(90deg)}' +
+  '.jgrp>summary b{font-size:14.5px;font-weight:600;flex:1}' +
+  '.jgrp>summary u{text-decoration:none;font-size:11.5px;color:#8d867a;' +
+  'border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:1px 7px}' +
+  '.jgrp .ep{padding-left:18px}' +
+  '.jgrp .ep:last-child{border-bottom:0}';
+document.head.appendChild(jgrpCSS);
+
+function jrnCard(i) {
+  const p = PRESETS[i];
+  return '<div class="ep jrn" data-j="' + i + '"><h3>' +
+    escapeHTML(L.cur === 'ko' ? p.ko : p.en) + '</h3><p>' +
+    escapeHTML(L.cur === 'ko' ? p.detailKo : p.detailEn) + '</p><span class="ref">' +
+    p.stops.length + L.s('곳', ' stops') + '</span></div>';
+}
+
 function openRoutes() {
   panelIsRoutes = true;
   document.getElementById('pTitle').textContent = L.s('길', 'Journeys');
@@ -2139,14 +2337,37 @@ function openRoutes() {
   h += '</div><div class="note"><em>' + escapeHTML(L.s('옛길', 'Ancient roads')) + '</em>' +
     '<button class="rbtn" data-act="roads">' + escapeHTML(roadsMesh
       ? L.s('감추기', 'Hide') : L.s('보이기', 'Show')) + '</button></div>';
-  h += PRESETS.map((p, i) => '<div class="ep jrn" data-j="' + i + '"><h3>' +
-    escapeHTML(L.cur === 'ko' ? p.ko : p.en) + '</h3><p>' +
-    escapeHTML(L.cur === 'ko' ? p.detailKo : p.detailEn) + '</p><span class="ref">' +
-    p.stops.length + L.s('곳', ' stops') + '</span></div>').join('');
+  // 앱과 같이 **주제만 접힌 채로** 보이고, 누르면 그 안의 여정이 펼쳐진다.
+  h += '<div class="note" style="border:0;padding-bottom:2px"><em>' +
+    escapeHTML(L.s('성경 여정', 'Bible journeys')) + '</em>' +
+    escapeHTML(L.s('주제를 누르면 그 안의 여정이 펼쳐집니다.',
+                   'Tap a theme to open the journeys inside it.')) + '</div>';
+  const used = new Set();
+  h += JGROUPS.map((g, gi) => {
+    const rows = (g.names || []).map(n => PRESETS.findIndex(p => p.ko === n))
+                                .filter(i2 => i2 >= 0);
+    rows.forEach(i2 => used.add(i2));
+    if (!rows.length) return '';
+    return '<details class="jgrp" data-g="' + gi + '"' +
+      (openGroups.has(gi) ? ' open' : '') + '><summary><b>' +
+      escapeHTML(L.cur === 'ko' ? g.ko : g.en) + '</b><u>' + rows.length +
+      escapeHTML(L.s('개', '')) + '</u></summary>' +
+      rows.map(jrnCard).join('') + '</details>';
+  }).join('');
+  // 어느 주제에도 들지 못한 여정이 있으면 빠뜨리지 않는다
+  const rest = PRESETS.map((p, i) => i).filter(i => !used.has(i));
+  if (rest.length) h += rest.map(jrnCard).join('');
   b.innerHTML = h;
   b.scrollTop = 0;
   panel.classList.add('open');
 }
+
+// details 는 toggle 이 위로 오르지 않는다 — 붙잡는 쪽에서 받는다.
+document.getElementById('pb').addEventListener('toggle', ev => {
+  const d = ev.target;
+  if (!d || !d.classList || !d.classList.contains('jgrp')) return;
+  if (d.open) openGroups.add(+d.dataset.g); else openGroups.delete(+d.dataset.g);
+}, true);
 
 document.getElementById('pb').addEventListener('click', ev => {
   const j = ev.target.closest('.jrn');
