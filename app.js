@@ -725,6 +725,15 @@ function updateLabels() {
   updateStopMarks();
 }
 
+/** 성구를 누르면 그 대목이 열리게 — 앱과 같은 주소를 쓴다 */
+function verseURL(ref) {
+  const first = String(ref).split(';')[0].trim();
+  if (!first) return null;
+  const q = encodeURIComponent(L.ref(first));
+  const path = L.cur === 'en' ? 'en/wol/l/r1/lp-e' : 'ko/wol/l/r8/lp-ko';
+  return 'https://wol.jw.org/' + path + '?q=' + q;
+}
+
 function escapeHTML(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -983,7 +992,8 @@ function openPlace(s) {
     const x = (L.cur === 'en' && e.textEn) ? e.textEn : e.text;
     html += '<div class="ep"><span class="era">' + escapeHTML(L.era(e.eraKo)) + '</span>' +
       '<h3>' + escapeHTML(t) + '</h3><p>' + escapeHTML(x) + '</p>' +
-      '<span class="ref">' + escapeHTML(L.ref(e.ref)) + '</span></div>';
+      '<a class="ref" href="' + escapeHTML(verseURL(e.ref) || '#') +
+      '" target="_blank" rel="noopener">' + escapeHTML(L.ref(e.ref)) + ' ↗</a></div>';
   }
   body.innerHTML = html;
   body.scrollTop = 0;
@@ -2215,6 +2225,8 @@ routeCSS.textContent =
   '.rstop span{color:#8d867a;padding:0 4px}' +
   '.rstop span:hover{color:#ff9d86}' +
   '.jrn{cursor:pointer} .jrn:hover h3{color:var(--gold)}' +
+  'a.ref{text-decoration:none;border-bottom:1px dotted rgba(253,204,97,.5)}' +
+  'a.ref:hover{border-bottom-style:solid;color:#ffe0a0}' +
   '.lrow{padding:11px 2px;cursor:pointer;display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid rgba(255,255,255,.07)}' +
   '.lrow i{font-style:normal;color:rgba(255,255,255,.3);font-size:13px;width:13px;padding-top:1px}' +
   '.lrow.on i{color:var(--gold)}' +
