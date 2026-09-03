@@ -214,6 +214,8 @@ async function loadAll() {
   REGIONS = terrain.regions || [];
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
   AREAS = areas || { tribes: [], nations: [] };
+  for (const a of (AREAS.tribes || [])) AREACOLOR.set(a.ko, a.color);
+  for (const a of (AREAS.nations || [])) AREACOLOR.set(a.ko, a.color);
   I18N = i18n;
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
@@ -727,6 +729,8 @@ const labelPool = [];
 let shown = [];
 // 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
 const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
+// 지파·민족 이름표에 쓸 그 땅의 색 (이름 → [r,g,b])
+const AREACOLOR = new Map();
 let highlight = null;
 let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
 
@@ -872,6 +876,16 @@ function updateLabels() {
     el.className = 'lab r' + s.rank + (ref ? ' refuge' : '') +
                    (highlight === s.ko ? ' on' : '');
     el.innerHTML = (ref || has ? '<i></i>' : '') + escapeHTML(L.cur === 'ko' ? s.ko : s.en);
+    // 지파·민족은 앱처럼 **그 땅 색의 판 위에 큰 흰 글씨**로 앉힌다.
+    const ac = (s.rank === 5 || s.rank === 6) ? AREACOLOR.get(s.ko) : null;
+    if (ac) {
+      const p = (m, al) => 'rgba(' + ac.map(v => Math.round(Math.min(255, v * 255 * m))).join(',') +
+                           ',' + al + ')';
+      el.style.background = p(0.52, 0.88);
+      el.style.borderColor = p(1.35, 0.95);
+    } else if (el.style.background) {
+      el.style.background = ''; el.style.borderColor = '';
+    }
     el.style.display = '';
     el.style.left = c.sx + 'px';
     el.style.top = c.sy + 'px';
@@ -1885,8 +1899,8 @@ function buildAreas(kind) {
     if (!areaShown(kind, a.ko)) continue;
     const c = new THREE.Color(a.color[0], a.color[1], a.color[2]);
     // 앱과 같이 **색으로만** 나눈다. 테두리를 두르니 지도가 아니라
-    // 색칠 공부처럼 보였다.
-    g.add(drapeArea(a.poly, c.getHex(), 0.38));
+    // 색칠 공부처럼 보였다. 진하기도 앱과 같게 (0.60).
+    g.add(drapeArea(a.poly, c.getHex(), 0.60));
   }
   return g;
 }
@@ -2666,8 +2680,12 @@ labSizeCSS.textContent =
   // 지형(산·산맥·골짜기)은 도시만큼 큰 것들이다. 작게 쓰면 안 보인다.
   '.lab.r4,.lab.r8,.lab.r9{font-size:17px;font-weight:700;letter-spacing:.05em}' +
   // 지파와 민족은 넓은 땅 이름 — 더 크고 옅게
-  '.lab.r5{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e6d3a8}' +
-  '.lab.r6{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e0b9a0}' +
+  // 지파·민족 — 앱과 같이 색 판 위의 큰 흰 글씨. 넓은 땅의 이름이라
+  // 성읍 이름보다 커야 한다.
+  '.lab.r5,.lab.r6{font-size:22px;font-weight:800;letter-spacing:.15em;color:#fff;' +
+  'padding:5px 15px;border-radius:17px;border:2px solid rgba(255,255,255,.55);' +
+  'text-shadow:0 2px 5px rgba(0,0,0,.6);box-shadow:0 3px 12px rgba(0,0,0,.42)}' +
+  '@media (max-width:560px){.lab.r5,.lab.r6{font-size:18px;padding:4px 12px}}' +
   '.lab.r7{font-size:16px;font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
   // 도피 도시 — 붉은 세모 (여호수아 20장의 여섯 성)
   '.lab.refuge i{width:0;height:0;border-radius:0;background:none;' +
