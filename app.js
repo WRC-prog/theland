@@ -719,9 +719,11 @@ function updateHUD() {
     if (d < bd) { bd = d; best = s; }
   }
   document.getElementById('hudPlace').textContent = best ? L.place(best.ko) : '—';
-  document.getElementById('hudSub').textContent =
-    (best ? L.region(best.region) + ' · ' : '') +
-    lat.toFixed(2) + '°N ' + lon.toFixed(2) + '°E';
+  // 앱처럼 표고도 알려 준다 (땅 높이는 이미 읽어 두었다)
+  const m = Math.round(groundY(lat, lon) / (0.001 * VEXAG));
+  document.getElementById('hudSub').innerHTML =
+    (best ? escapeHTML(L.region(best.region)) + ' · ' : '') +
+    '<b>' + m + ' m</b> · ' + lat.toFixed(3) + '°N ' + lon.toFixed(3) + '°E';
 }
 
 // ── 옆 판 ─────────────────────────────────────────────────
@@ -883,6 +885,49 @@ function roadPath(a, b) {
   return [a, ...mid, b];
 }
 
+/** 점들을 부드러운 곡선으로 흘린다 (캣멀-롬).
+ *
+ *  옛길 자료는 몇 십 km 마다 한 점이라, 곧게 이으면 각진 꺾은선이 된다.
+ *  실제 길은 그렇게 다니지 않는다. 점 네 개를 보고 사이를 굽혀 준다. */
+function smoothPath(pts, stepKm) {
+  if (pts.length < 3) return densify(pts, stepKm);
+  const P = i => pts[Math.max(0, Math.min(pts.length - 1, i))];
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = P(i - 1), b = P(i), c = P(i + 1), d = P(i + 2);
+    const n = Math.max(1, Math.ceil(kmLL(b, c) / stepKm));
+    for (let k = 0; k < n; k++) {
+      const t = k / n, t2 = t * t, t3 = t2 * t;
+      const f = (p, q, r, s) => 0.5 * (2 * q + (r - p) * t
+        + (2 * p - 5 * q + 4 * r - s) * t2 + (-p + 3 * q - 3 * r + s) * t3);
+      out.push({ lat: f(a.lat, b.lat, c.lat, d.lat), lon: f(a.lon, b.lon, c.lon, d.lon) });
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+/** 이 점이 어느 호수 안인가 — 길이 물 위를 지나가지 않게 */
+function inLake(lat, lon) {
+  for (const l of LAKES) {
+    let inside = false, r = l.ring;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+      if ((r[i][0] > lat) !== (r[j][0] > lat) &&
+          lon < (r[j][1] - r[i][1]) * (lat - r[i][0]) / (r[j][0] - r[i][0]) + r[i][1]) inside = !inside;
+    }
+    if (inside) return true;
+  }
+  return false;
+}
+
+/** 물에 잠기는 토막은 끊어 내고 나머지만 얹는다 */
+function addDryRuns(group, pts, widthKm, color, lift, opt) {
+  let run = [];
+  const flush = () => { if (run.length > 1) group.add(makeRibbon(run, widthKm, color, lift, opt)); run = []; };
+  for (const p of pts) { if (inLake(p.lat, p.lon)) flush(); else run.push(p); }
+  flush();
+}
+
 /** 마디마다 3 km 안쪽으로 잘게 나눈다 — 그래야 땅을 타고 흐른다 */
 function densify(pts, stepKm) {
   const out = [];
@@ -896,7 +941,13 @@ function densify(pts, stepKm) {
   return out;
 }
 
-function makeRibbon(pts, widthKm, color, lift) {
+/** 길·강을 땅 위에 얹는다.
+ *
+ *  예전에는 깊이 견주기를 꺼서 언덕 뒤의 길까지 다 비쳐 보였다 — 그래서
+ *  지도 위에 **붕 떠 있는** 느낌이 났다. 이제는 땅이 앞을 가리면 가려지고,
+ *  대신 다각형 오프셋으로 땅에 파묻히는 것만 막는다. */
+function makeRibbon(pts, widthKm, color, lift, opt) {
+  opt = opt || {};
   const v = [], idx = [];
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i], q = pts[Math.min(i + 1, pts.length - 1)], o = pts[Math.max(i - 1, 0)];
@@ -912,8 +963,10 @@ function makeRibbon(pts, widthKm, color, lift) {
   g.setIndex(idx);
   // 땅에 파묻히지 않게 깊이 견주기를 끈다 — 언덕 너머의 길도 비쳐 보인다
   const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-    color, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
-  m.renderOrder = 5;
+    color, transparent: true, opacity: opt.opacity != null ? opt.opacity : 0.9,
+    depthTest: opt.through !== true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -8 }));
+  m.renderOrder = opt.order || 5;
   m.frustumCulled = false;
   return m;
 }
@@ -928,7 +981,10 @@ function drawRoute() {
   if (routeMesh) { scene.remove(routeMesh); routeMesh.geometry.dispose(); routeMesh.material.dispose(); routeMesh = null; }
   if (!routePts || routePts.length < 2) return;
   ribbonDist = cam.dist;
-  routeMesh = makeRibbon(routePts, Math.max(1.6, cam.dist * 0.009), 0xfdcc61, 0.25);
+  // 형광펜처럼 굵던 것을 가늘게. 언덕 뒤에서도 비쳐 보이는 것은 그대로 —
+  // 어디로 가는 길인지가 먼저다.
+  routeMesh = makeRibbon(routePts, Math.max(0.42, cam.dist * 0.0032), 0xf2b64c, 0.10,
+                         { through: true, opacity: 0.95, order: 6 });
   scene.add(routeMesh);
 }
 
@@ -938,7 +994,7 @@ function setRoute(stops) {
   if (routeStops.length < 2) { routePts = null; drawRoute(); return 0; }
   let pts = [];
   for (let i = 0; i < routeStops.length - 1; i++) {
-    const seg = densify(roadPath(routeStops[i], routeStops[i + 1]), 3);
+    const seg = smoothPath(roadPath(routeStops[i], routeStops[i + 1]), 1.5);
     pts = pts.concat(i ? seg.slice(1) : seg);
   }
   routePts = pts;
@@ -970,10 +1026,11 @@ function toggleRoads() {
   }
   roadsMesh = new THREE.Group();
   for (const r of ROADS) {
-    const pts = densify(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 4);
-    const m = makeRibbon(pts, Math.max(0.5, cam.dist * 0.0022), 0xc9b48a, 0.1);
-    m.material.opacity = 0.5;
-    roadsMesh.add(m);
+    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 1.5);
+    // 큰 길은 굵게, 곁길은 가늘게. 물 위는 지나가지 않는다.
+    const wide = Math.max(0.35, cam.dist * 0.0016) * (r.rank === 0 ? 1.5 : 1);
+    addDryRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd8c39a : 0xbda98a, 0.06,
+               { opacity: r.rank === 0 ? 0.62 : 0.42, order: 4 });
   }
   scene.add(roadsMesh);
   return true;
@@ -1068,14 +1125,13 @@ function addRivers() {
   riverMesh = new THREE.Group();
   for (const r of WAYS) {
     if (!r.pts || r.pts.length < 2) continue;
-    const pts = densify(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 2.5);
+    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 1.2);
     // 실제 강폭은 수십 미터라 그대로 그리면 안 보인다. 눈에 잡히는 굵기로
     // 올리되, 큰 강과 마른 급류 골짜기는 구별되게 둔다.
     const wide = Math.max(0.35, Math.min(1.6, (r.widthM || 30) / 90));
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
-    const m = makeRibbon(pts, wide, dry ? 0x6f7f6a : 0x2f6f95, 0.16);
-    m.material.opacity = dry ? 0.5 : 0.85;
-    riverMesh.add(m);
+    addDryRuns(riverMesh, pts, wide, dry ? 0x7a866f : 0x2f6f95, 0.05,
+               { opacity: dry ? 0.45 : 0.8, order: 3 });
   }
   scene.add(riverMesh);
 }
@@ -1132,6 +1188,8 @@ function showCard(s) {
   cardEl.innerHTML =
     '<div id="cName">' + escapeHTML(L.place(s.ko)) + (eps || note ? ' <i>▤</i>' : '') +
     '<small>' + escapeHTML(L.region(s.region)) +
+    ' · ' + Math.round(s.y / (0.001 * VEXAG)) + ' m' +
+    ' · ' + s.lat.toFixed(3) + '°N ' + s.lon.toFixed(3) + '°E' +
     (eps ? ' · <b>' + L.s('사건 ' + eps, eps + ' records') + '</b>' : '') + '</small></div>' +
     '<span class="cgap"></span>' +
     pill('start', L.s('출발', 'Start')) + pill('via', L.s('경유', 'Via')) + pill('end', L.s('도착', 'End')) +
@@ -1272,7 +1330,9 @@ function tick() {
     // 얼어붙으면 고장 난 줄 안다. 그래서 지도를 먼저 보여 주고, 이름표는
     // 잠깐 뒤에 땅 위로 내려앉는다.
     setTimeout(() => {
-      buildGrid(canaan, texC.image, 600, 680);
+      // 길을 땅에 붙이려면 땅 높이를 촘촘히 알아야 한다. 600×680(550 m)로는
+      // 능선에서 길이 파묻히거나 떠올랐다.
+      buildGrid(canaan, texC.image, 1500, 1700);
       placeSites();
       addRivers();          // 강은 땅 높이를 알아야 얹을 수 있다
       toggleRoads();        // 옛길은 앱처럼 처음부터 깔아 둔다
