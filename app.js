@@ -980,6 +980,109 @@ function makeRibbon(pts, widthKm, color, lift, opt) {
 }
 
 
+
+// ── 땅에 붙는 실 ──────────────────────────────────────────
+//
+// 길을 리본으로 얹어 놓으니 두 가지가 어긋났다.
+//   · 땅이 여기저기 **파먹은** 것처럼 길을 삼켰다 — 리본의 높이는 성긴
+//     격자에서 읽고 땅은 110 m 로 그리니, 능선마다 땅이 이겼다.
+//   · 가장자리가 칼로 자른 듯해서 **형광펜**이나 **테이프**로 붙인 것 같았다.
+//
+// 그래서 실도 지형과 **똑같은 그림에서** 제 높이를 읽게 한다(꼭짓점 셰이더).
+// 땅이 아무리 촘촘해져도 길은 늘 그 위에 앉는다. 가장자리는 투명하게
+// 스러지게 해서 띠가 아니라 실로 보이게 한다.
+let hTexA = null, hTexB = null, hBoundA = null, hBoundB = null;
+
+function tileBounds(t) {
+  const x0 = worldX(t.lonMin), z0 = worldZ(t.latMax);
+  return new THREE.Vector4(x0, z0, worldX(t.lonMax) - x0, worldZ(t.latMin) - z0);
+}
+
+function drapeMaterial(color, opacity, lift, through) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthTest: through !== true, depthWrite: false,
+    side: THREE.DoubleSide, polygonOffset: true,
+    polygonOffsetFactor: -8, polygonOffsetUnits: -12,
+    uniforms: {
+      hA: { value: hTexA }, bA: { value: hBoundA || new THREE.Vector4(0,0,1,1) },
+      hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
+      hasB: { value: hTexB ? 1 : 0 },
+      vex: { value: VEXAG }, lift: { value: lift },
+      tint: { value: new THREE.Color(color) }, alpha: { value: opacity }
+    },
+    vertexShader: [
+      'uniform sampler2D hA; uniform vec4 bA;',
+      'uniform sampler2D hB; uniform vec4 bB;',
+      'uniform float hasB, vex, lift;',
+      'attribute float edge;',
+      'varying float vEdge;',
+      'float dec(vec3 c){ return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0; }',
+      'void main(){',
+      '  vec3 p = position;',
+      '  vec2 ua = vec2((p.x - bA.x) / bA.z, 1.0 - (p.z - bA.y) / bA.w);',
+      '  float h;',
+      '  if (ua.x > 0.001 && ua.x < 0.999 && ua.y > 0.001 && ua.y < 0.999) {',
+      '    h = dec(texture2D(hA, ua).rgb);',
+      '  } else if (hasB > 0.5) {',
+      '    vec2 ub = vec2((p.x - bB.x) / bB.z, 1.0 - (p.z - bB.y) / bB.w);',
+      '    h = dec(texture2D(hB, clamp(ub, 0.001, 0.999)).rgb);',
+      '  } else { h = 0.0; }',
+      '  p.y = h * 0.001 * vex + lift;',
+      '  vEdge = edge;',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
+      '}'
+    ].join('\n'),
+    fragmentShader: [
+      'uniform vec3 tint; uniform float alpha;',
+      'varying float vEdge;',
+      'void main(){',
+      '  // 가장자리로 갈수록 스러지게 — 칼로 자른 띠가 아니라 실처럼',
+      '  float a = alpha * (1.0 - vEdge * vEdge);',
+      '  if (a < 0.01) discard;',
+      '  gl_FragColor = vec4(tint, a);',
+      '}'
+    ].join('\n')
+  });
+}
+
+/** 땅에 붙는 실 하나. 가운데가 진하고 가장자리는 스러진다. */
+function drapeLine(pts, widthKm, color, lift, opt) {
+  opt = opt || {};
+  const pos = [], edge = [], idx = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[Math.min(i + 1, n - 1)], o = pts[Math.max(i - 1, 0)];
+    let dx = worldX(q.lon) - worldX(o.lon), dz = worldZ(q.lat) - worldZ(o.lat);
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
+    const x = worldX(p.lon), z = worldZ(p.lat);
+    pos.push(x + nx, 0, z + nz);  edge.push(1);
+    pos.push(x, 0, z);            edge.push(0);
+    pos.push(x - nx, 0, z - nz);  edge.push(1);
+    if (i < n - 1) {
+      const a = i * 3, b = a + 3;
+      idx.push(a, a+1, b,  a+1, b+1, b,  a+1, a+2, b+1,  a+2, b+2, b+1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
+  g.setIndex(idx);
+  const m = new THREE.Mesh(g, drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8,
+                                            lift, opt.through));
+  m.renderOrder = opt.order || 5;
+  m.frustumCulled = false;
+  return m;
+}
+
+/** 물에 잠기는 토막은 끊어 내고 나머지만 얹는다 */
+function drapeRuns(group, pts, widthKm, color, lift, opt) {
+  let run = [];
+  const flush = () => { if (run.length > 1) group.add(drapeLine(run, widthKm, color, lift, opt)); run = []; };
+  for (const p of pts) { if (inLake(p.lat, p.lon)) flush(); else run.push(p); }
+  flush();
+}
+
 /** 길 위에 화살표를 촘촘히 박는다 — 어느 쪽으로 가는 길인지 한눈에 */
 function makeArrows(pts, sizeKm, color, lift, opt) {
   opt = opt || {};
@@ -1174,10 +1277,10 @@ function drawRoute() {
   ribbonDist = cam.dist;
   // 굵은 형광펜 한 줄이 아니라 **길잡이 화살표**로 — 어느 쪽으로 가는지가
   // 먼저 보여야 한다. 가느다란 실선 위에 화살표를 촘촘히 박는다.
-  const w = Math.max(0.30, cam.dist * 0.0022);
+  const w = Math.max(0.26, cam.dist * 0.0020);
   routeMesh = new THREE.Group();
-  routeMesh.add(makeRibbon(routePts, w, 0x8f6a24, 0.09,
-                           { through: true, opacity: 0.55, order: 6 }));
+  routeMesh.add(drapeLine(routePts, w * 2.2, 0xf2b64c, 0.02,
+                          { through: true, opacity: 0.70, order: 6 }));
   routeMesh.add(makeArrows(routePts, Math.max(0.9, cam.dist * 0.0075), 0xffd27a, 0.10,
                            { through: true, opacity: 0.95, order: 7 }));
   scene.add(routeMesh);
@@ -1189,7 +1292,7 @@ function setRoute(stops) {
   if (routeStops.length < 2) { routePts = null; drawRoute(); buildPins(); return 0; }
   let pts = [];
   for (let i = 0; i < routeStops.length - 1; i++) {
-    const seg = smoothPath(roadPath(routeStops[i], routeStops[i + 1]), 1.5);
+    const seg = smoothPath(roadPath(routeStops[i], routeStops[i + 1]), 0.15);
     pts = pts.concat(i ? seg.slice(1) : seg);
   }
   routePts = pts;
@@ -1222,11 +1325,11 @@ function toggleRoads() {
   }
   roadsMesh = new THREE.Group();
   for (const r of ROADS) {
-    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 1.5);
-    // 큰 길은 굵게, 곁길은 가늘게. 물 위는 지나가지 않는다.
-    const wide = Math.max(0.35, cam.dist * 0.0016) * (r.rank === 0 ? 1.5 : 1);
-    addDryRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd8c39a : 0xbda98a, 0.06,
-               { opacity: r.rank === 0 ? 0.62 : 0.42, order: 4 });
+    // 땅을 촘촘히 따라가야 능선에서 파먹히지 않는다 (110 m 마디)
+    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 0.12);
+    const wide = Math.max(0.30, cam.dist * 0.0013) * (r.rank === 0 ? 1.6 : 1);
+    drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd9c8a4 : 0xc3b190, 0.012,
+              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 4 });
   }
   scene.add(roadsMesh);
   return true;
@@ -1321,13 +1424,13 @@ function addRivers() {
   riverMesh = new THREE.Group();
   for (const r of WAYS) {
     if (!r.pts || r.pts.length < 2) continue;
-    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 1.2);
+    const pts = smoothPath(r.pts.map(p => ({ lat: p[0], lon: p[1] })), 0.12);
     // 실제 강폭은 수십 미터라 그대로 그리면 안 보인다. 눈에 잡히는 굵기로
     // 올리되, 큰 강과 마른 급류 골짜기는 구별되게 둔다.
     const wide = Math.max(0.35, Math.min(1.6, (r.widthM || 30) / 90));
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
-    addDryRuns(riverMesh, pts, wide, dry ? 0x7a866f : 0x2f6f95, 0.05,
-               { opacity: dry ? 0.45 : 0.8, order: 3 });
+    drapeRuns(riverMesh, pts, wide, dry ? 0x7f8a72 : 0x2f6f95, 0.010,
+              { opacity: dry ? 0.4 : 0.72, order: 3 });
   }
   scene.add(riverMesh);
 }
@@ -1510,6 +1613,7 @@ function tick() {
     say(L.s('가나안 지형', 'Canaan terrain'), 65);
     baseCanaan = makeTerrain(canaan, 600, 680, texC);
     canaanTex = texC; canaanTile = canaan;
+    hTexA = texC; hBoundA = tileBounds(canaan);
     scene.add(baseCanaan);
     const canaanClip = new THREE.Vector4(
       worldX(canaan.lonMin), worldZ(canaan.latMax),
@@ -1542,6 +1646,7 @@ function tick() {
       loadTexture(region.file).then(texR => {
         // 3280×1760 짜리 그림을 420×240 으로 세우면 여덟 칸에 꼭짓점 하나다.
       // 가나안 밖이 유독 뭉개져 보이던 까닭이 그것이다. 그림만큼 세운다.
+      hTexB = texR; hBoundB = tileBounds(region);
       const m = makeTerrain(region, 1000, 540, texR, canaanClip);
         m.renderOrder = -1;
         scene.add(m);
