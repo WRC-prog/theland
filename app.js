@@ -907,6 +907,25 @@ function verseURL(ref) {
   return 'https://wol.jw.org/' + path + '?q=' + q;
 }
 
+/** 눌렀을 때 확실히 듣는다.
+ *
+ *  지도를 손가락으로 붙잡아 끄는 화면이라, 브라우저에 따라 단추 위에서 뗀
+ *  손가락이 click 으로 이어지지 않는 일이 있다. 폰에서 「따라가기가 안 먹는다」는
+ *  말이 여기서 나왔다. 그래서 pointerup 도 함께 듣고, 곧이어 오는 click 은
+ *  한 번 더 부르지 않도록 흘려 보낸다. */
+function onTap(el, fn) {
+  let last = 0;
+  el.addEventListener('pointerup', ev => {
+    if (ev.button > 0) return;
+    last = Date.now();
+    fn(ev);
+  });
+  el.addEventListener('click', ev => {
+    if (Date.now() - last < 700) return;
+    fn(ev);
+  });
+}
+
 function escapeHTML(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -1101,7 +1120,7 @@ function addViewButtons() {
     const b = document.createElement('button');
     b.className = 'btn'; b.title = title;
     b.innerHTML = label;
-    b.addEventListener('click', fn);
+    onTap(b, fn);
     tools.insertBefore(b, tools.firstChild);
     return b;
   };
@@ -1137,7 +1156,7 @@ function addViewButtons() {
   qualBtn.id = 'qualPick';
   qualBtn.className = 'card';
   qualBtn.title = L.s('지형을 얼마나 자세히 그릴지', 'How detailed the land is');
-  qualBtn.addEventListener('click', ev => {
+  onTap(qualBtn, ev => {
     const b = ev.target.closest('[data-q]');
     if (b && b.dataset.q !== QUAL) setQual(b.dataset.q);
   });
@@ -1157,10 +1176,8 @@ function addViewButtons() {
     '#qualPick button{padding:0 7px;font-size:11.5px}}';
   document.head.appendChild(qCSS);
 
-  // 데이터로 들어온 듯하면 한 번만 알려 준다
-  if (qualAuto && QUAL === 'low') toast(L.s(
-    '데이터 연결로 보여 지형을 가볍게(하) 열었습니다. 위 「하」를 눌러 올릴 수 있습니다.',
-    'Looks like a mobile connection — opened at low detail. Tap “Low” above to raise it.'));
+  // 처음은 늘 「하」로 연다. 연결을 넘겨짚어 알림을 띄우던 것은 걷어냈다 —
+  // 와이파이인데도 데이터라고 하는 일이 있었다. 화질은 위 단추로 바로 고른다.
 }
 
 function updateHUD() {
@@ -1208,7 +1225,7 @@ function openPlace(s) {
   body.scrollTop = 0;
   panel.classList.add('open');
 }
-document.getElementById('closeBtn').onclick = () => panel.classList.remove('open');
+onTap(document.getElementById('closeBtn'), () => panel.classList.remove('open'));
 
 // ── 문장에서 곳 찾아내기 ──────────────────────────────────
 //
@@ -1306,10 +1323,10 @@ document.getElementById('langBtn').onclick = () => {
 };
 // 처음 단추에도 글자를 붙인다
 document.getElementById('homeBtn').innerHTML = '<i>⌂</i><u>' + '예루살렘' + '</u>';
-document.getElementById('homeBtn').onclick = () => {
+onTap(document.getElementById('homeBtn'), () => {
   const s = siteByName.get('예루살렘');
   if (s) flyTo(s, 260); else { cam.tx = 0; cam.tz = 0; cam.dist = 260; applyCam(); }
-};
+});
 function applyLang() {
   document.getElementById('langBtn').innerHTML =
     L.cur === 'ko' ? '<i>EN</i><u>English</u>' : '<i>한</i><u>한국어</u>';
@@ -1975,7 +1992,7 @@ function syncSpeedBtn() {
   if (!spdBtn) {
     spdBtn = document.createElement('div');
     spdBtn.id = 'spdBtn';
-    spdBtn.addEventListener('click', ev => {
+    onTap(spdBtn, ev => {
       const b = ev.target.closest('[data-sp]');
       if (!b) return;
       speedIdx = +b.dataset.sp;
@@ -1996,7 +2013,7 @@ function syncClrBtn() {
   if (!clrBtn) {
     clrBtn = document.createElement('button');
     clrBtn.id = 'clrBtn';
-    clrBtn.addEventListener('click', () => {
+    onTap(clrBtn, () => {
       plan.start = null; plan.end = null; plan.via = [];
       clearRoute();
       updateStopMarks(); updateLabels();
@@ -2025,7 +2042,7 @@ function syncGoBtn() {
   if (!goBtn) {
     goBtn = document.createElement('button');
     goBtn.id = 'goBtn';
-    goBtn.addEventListener('click', () => { toggleFollow(); syncGoBtn();
+    onTap(goBtn, () => { toggleFollow(); syncGoBtn();
       if (panelIsRoutes && panel.classList.contains('open')) openRoutes(); });
     document.body.appendChild(goBtn);
     const st = document.createElement('style');
@@ -2406,7 +2423,7 @@ function showCard(s) {
     cardEl = document.createElement('div');
     cardEl.id = 'card';
     document.body.appendChild(cardEl);
-    cardEl.addEventListener('click', ev => {
+    onTap(cardEl, ev => {
       const slot = ev.target.dataset.slot;
       if (slot) { assign(cardSite, slot); return; }
       if (ev.target.id === 'cMinus') {
@@ -2627,7 +2644,7 @@ document.getElementById('pb').addEventListener('toggle', ev => {
   if (d.open) openGroups.add(+d.dataset.g); else openGroups.delete(+d.dataset.g);
 }, true);
 
-document.getElementById('pb').addEventListener('click', ev => {
+onTap(document.getElementById('pb'), ev => {
   const j = ev.target.closest('.jrn');
   if (j) {
     const p = PRESETS[+j.dataset.j];
