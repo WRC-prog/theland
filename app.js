@@ -97,11 +97,11 @@ async function setQual(q) {
             'Switching terrain to ' + QUAL_NAME()[q] + '…'));
   try {
     const [ca, re] = TERRAIN.tiles;
-    const texC = await loadTexture(qualFile(ca.file)).catch(() => loadTexture(ca.file));
+    const texC = await loadTexture(qualFile(ca.file, ca)).catch(() => loadTexture(ca.file));
     swapTexture(baseCanaan, ca, texC);
     canaanTex = texC; hTexA = texC;
     if (worldMesh) {
-      const texR = await loadTexture(qualFile(re.file)).catch(() => loadTexture(re.file));
+      const texR = await loadTexture(qualFile(re.file, re)).catch(() => loadTexture(re.file));
       swapTexture(worldMesh, re, texR);
       hTexB = texR;
     }
@@ -109,7 +109,7 @@ async function setQual(q) {
       if (!m || m === 'loading') continue;
       const t = REGIONS.find(x => x.file === file);
       if (!t) continue;
-      const tx = await loadTexture(qualFile(t.file)).catch(() => loadTexture(t.file));
+      const tx = await loadTexture(qualFile(t.file, t)).catch(() => loadTexture(t.file));
       swapTexture(m, t, tx);
     }
     // 길·강이 쓰는 재질도 같은 그림을 보게 한다
@@ -144,8 +144,13 @@ function QUAL_NAME() {
   return { low: L.s('하', 'Low'), mid: L.s('중', 'Mid'), hi: L.s('상', 'High') };
 }
 
-/** 화질에 맞는 그림 이름 — 상은 본이름 그대로 */
-function qualFile(f) {
+/** 화질에 맞는 그림 이름 — 상은 본이름 그대로.
+ *
+ *  중·하 짜리를 본이름 옆에 두지 못할 때가 있다(본판은 뿌리에, 나머지는
+ *  terrain/ 에). 그래서 terrain.json 에 "mid"·"low" 로 자리를 따로 적어
+ *  두면 그것을 먼저 본다. */
+function qualFile(f, t) {
+  if (t && QUAL !== 'hi' && t[QUAL]) return t[QUAL];
   return QUAL === 'hi' ? f : f.replace(/\.png$/, '_' + QUAL + '.png');
 }
 
@@ -608,7 +613,7 @@ function updateRegions() {
       const o = REGIONS.find(x => x.file === f);
       if (o) rects.push(tileRect(o));
     }
-    loadTexture(qualFile(t.file)).catch(() => loadTexture(t.file)).then(tex => {
+    loadTexture(qualFile(t.file, t)).catch(() => loadTexture(t.file)).then(tex => {
       const m = makeTerrain(t, segX, segZ, tex, rects);
       m.renderOrder = -0.5;                   // 성긴 배경보다 위, 가나안보다 아래
       scene.add(m);
@@ -2650,7 +2655,7 @@ function tick() {
 
     // 고른 화질의 그림이 아직 안 올라가 있으면 본이름으로 물러선다 —
     // 그림 한 장 없다고 지도가 통째로 안 뜨면 안 된다.
-    const texC = await loadTexture(qualFile(canaan.file))
+    const texC = await loadTexture(qualFile(canaan.file, canaan))
       .catch(() => loadTexture(canaan.file));
     say(L.s('가나안 지형', 'Canaan terrain'), 65);
     baseCanaan = makeTerrain(canaan, 600, 680, texC);
@@ -2684,7 +2689,7 @@ function tick() {
       toggleRoads();        // 옛길은 앱처럼 처음부터 깔아 둔다
       applyCam();
 
-      loadTexture(qualFile(region.file))
+      loadTexture(qualFile(region.file, region))
       .catch(() => loadTexture(region.file))
       .then(texR => {
         // 3280×1760 짜리 그림을 420×240 으로 세우면 여덟 칸에 꼭짓점 하나다.
