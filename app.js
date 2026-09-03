@@ -510,11 +510,38 @@ let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누�
 
 function labelCap() { return innerWidth < 560 ? 44 : 110; }
 
+// ── 테마 ──────────────────────────────────────────────────
+//
+// 지파도 민족도 지형도 한꺼번에 띄우면 지도가 아니라 낱말 더미가 된다.
+// 갈래를 골라 볼 수 있게 한다. 처음에는 성읍·지형·물길만 켜 둔다.
+const LAYERS = [
+  { k: 'city',   ko: '성읍',  en: 'Towns',   ranks: [0, 1, 2, 3], on: true },
+  { k: 'land',   ko: '지형',  en: 'Land',    ranks: [4, 8, 9],    on: true },
+  { k: 'water',  ko: '물길',  en: 'Water',   ranks: [7],          on: true },
+  { k: 'tribe',  ko: '지파',  en: 'Tribes',  ranks: [5],          on: false },
+  { k: 'nation', ko: '민족',  en: 'Nations', ranks: [6],          on: false },
+  { k: 'inner',  ko: '성 안', en: 'Inside',  ranks: [10],         on: true }
+];
+try {
+  const saved = JSON.parse(localStorage.getItem('theland.layers') || 'null');
+  if (saved) for (const l of LAYERS) if (saved[l.k] != null) l.on = !!saved[l.k];
+} catch (e) {}
+const rankOn = {};
+function syncLayers() {
+  for (const l of LAYERS) for (const r of l.ranks) rankOn[r] = l.on;
+  try {
+    const o = {}; for (const l of LAYERS) o[l.k] = l.on;
+    localStorage.setItem('theland.layers', JSON.stringify(o));
+  } catch (e) {}
+}
+syncLayers();
+
 function updateLabels() {
   const v = new THREE.Vector3();
   const cand = [];
   const camPos = camera.position;
   for (const s of SITES) {
+    if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
     if (s.rank >= 10 && cam.dist > 12) continue;         // 성 안의 것은 가까이서만
     if (s.rank >= 5 && s.rank <= 9 && cam.dist < 60) continue;
     v.set(s.x, s.y, s.z).project(camera);
@@ -752,6 +779,7 @@ function addViewButtons() {
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
   mk('⇢', L.s('길', 'Journeys'), openRoutes);
+  mk('☰', L.s('무엇을 띄울지 고르기', 'What to show'), openLayers);
   lookBtn = mk('◎', L.s('둘러보기 — 제자리에서 사방을 본다', 'Look around'), () => {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
@@ -1578,6 +1606,17 @@ cardCSS.textContent =
 document.head.appendChild(cardCSS);
 
 // ── 경로 판 ───────────────────────────────────────────────
+function openLayers() {
+  panelIsRoutes = false;
+  document.getElementById('pTitle').textContent = L.s('무엇을 띄울까', 'What to show');
+  document.getElementById('pSub').textContent = L.s('갈래를 골라 봅니다', 'Choose the layers');
+  document.getElementById('pb').innerHTML =
+    '<div class="note">' + LAYERS.map(l =>
+      '<div class="lrow" data-layer="' + l.k + '"><i>' + (l.on ? '●' : '○') + '</i>' +
+      escapeHTML(L.cur === 'ko' ? l.ko : l.en) + '</div>').join('') + '</div>';
+  panel.classList.add('open');
+}
+
 let panelIsRoutes = false;
 function openRoutes() {
   panelIsRoutes = true;
@@ -1624,6 +1663,12 @@ document.getElementById('pb').addEventListener('click', ev => {
       Math.round(km) + L.s(' km · ' + p.stops.length + '곳', ' km · ' + p.stops.length + ' stops');
     return;
   }
+  const lr = ev.target.closest('.lrow');
+  if (lr) {
+    const l = LAYERS.find(x => x.k === lr.dataset.layer);
+    if (l) { l.on = !l.on; syncLayers(); updateLabels(); openLayers(); }
+    return;
+  }
   const del = ev.target.dataset.del;
   if (del != null) { unassign(SITES[+del]); setRoute(planStops()); openRoutes(); return; }
   const go = ev.target.closest('[data-go]');
@@ -1644,11 +1689,15 @@ labSizeCSS.textContent =
   // 중 — 성읍
   '.lab.r2{font-size:13.5px;font-weight:600}' +
   '.lab.r3{font-size:12.5px;font-weight:500}' +
-  // 하 — 지형과 지역
-  '.lab.r4,.lab.r5,.lab.r6,.lab.r7,.lab.r8,.lab.r9{font-size:12px}' +
-  '.lab.r7{color:#a9cfe0}' +
+  // 지형(산·산맥·골짜기)은 도시만큼 큰 것들이다. 작게 쓰면 안 보인다.
+  '.lab.r4,.lab.r8,.lab.r9{font-size:15px;font-weight:600;letter-spacing:.04em}' +
+  // 지파와 민족은 넓은 땅 이름 — 더 크고 옅게
+  '.lab.r5{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e6d3a8}' +
+  '.lab.r6{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e0b9a0}' +
+  '.lab.r7{font-size:14px;font-weight:600;color:#a9cfe0;letter-spacing:.05em}' +
   '@media (max-width:560px){.lab.r0{font-size:16px}.lab.r1{font-size:13.5px}' +
-  '.lab.r2{font-size:12px}.lab.r3{font-size:11px}}';
+  '.lab.r2{font-size:12px}.lab.r3{font-size:11px}' +
+  '.lab.r4,.lab.r8,.lab.r9{font-size:13px}.lab.r5,.lab.r6{font-size:14.5px}}';
 document.head.appendChild(labSizeCSS);
 
 /** 화면 아래에 잠깐 뜨는 알림 */
@@ -1675,7 +1724,10 @@ routeCSS.textContent =
   '.rstop{padding:5px 0;font-size:13px;display:flex;justify-content:space-between;cursor:pointer}' +
   '.rstop span{color:#8d867a;padding:0 4px}' +
   '.rstop span:hover{color:#ff9d86}' +
-  '.jrn{cursor:pointer} .jrn:hover h3{color:var(--gold)}';
+  '.jrn{cursor:pointer} .jrn:hover h3{color:var(--gold)}' +
+  '.lrow{padding:9px 0;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:9px}' +
+  '.lrow i{font-style:normal;color:var(--gold);font-size:12px;width:12px}' +
+  '.lrow:hover{color:var(--gold)}';
 document.head.appendChild(routeCSS);
 
 // ── 돌리기 ────────────────────────────────────────────────
