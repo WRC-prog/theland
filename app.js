@@ -92,7 +92,7 @@ async function setQual(q) {
   try { localStorage.setItem('theland.qual', q); } catch (e) {}
   const old = QUAL;
   QUAL = q;
-  if (qualBtn) qualBtn.textContent = QUAL_NAME()[q];
+  if (qualBtn) qualBtn.innerHTML = '<i>◍</i><u>' + L.s('화질 ', 'Detail ') + QUAL_NAME()[q] + '</u>';
   toast(L.s('지형을 ' + QUAL_NAME()[q] + ' 화질로 바꾸는 중…',
             'Switching terrain to ' + QUAL_NAME()[q] + '…'));
   try {
@@ -125,7 +125,7 @@ async function setQual(q) {
     toast(L.s('화질 ' + QUAL_NAME()[q], 'Detail: ' + QUAL_NAME()[q]));
   } catch (e) {
     QUAL = old;
-    if (qualBtn) qualBtn.textContent = QUAL_NAME()[old];
+    if (qualBtn) qualBtn.innerHTML = '<i>◍</i><u>' + L.s('화질 ', 'Detail ') + QUAL_NAME()[old] + '</u>';
     toast(L.s('그 화질의 지형이 아직 없습니다', 'That level is not available yet'));
   }
   qualBusy = false;
@@ -162,7 +162,7 @@ function unpack(o) {                       // {cols, rows} → 객체 배열
 
 async function loadAll() {
   say('자료를 불러오는 중…', 5);
-  const [sites, events, notes, i18n, terrain, roads, presets, ways] = await Promise.all([
+  const [sites, events, notes, i18n, terrain, roads, presets, ways, areas] = await Promise.all([
     loadJSON('data/sites.json'),
     loadJSON('data/events.json'),
     loadJSON('data/notes.json'),
@@ -170,11 +170,13 @@ async function loadAll() {
     loadJSON('terrain/terrain.json'),
     loadJSON('data/roads.json'),
     loadJSON('data/presets.json'),
-    loadJSON('data/waterways.json')
+    loadJSON('data/waterways.json'),
+    loadJSON('data/areas.json').catch(() => ({ tribes: [], nations: [] }))
   ]);
   I18N = i18n; TERRAIN = terrain;
   REGIONS = terrain.regions || [];
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
+  AREAS = areas || { tribes: [], nations: [] };
   I18N = i18n;
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
@@ -901,24 +903,37 @@ function zoomAt(f, cx, cy) {
 }
 
 /** 화면 위 단추 — 마우스가 없는 화면에서도 다가가고 기울일 수 있게 */
+/** 위쪽 단추 — 그림쇠만 두면 눌러 보기 전에는 무엇인지 알 수가 없다.
+ *  그림쇠 옆에 **글자**를 붙인다. 좁은 화면에서는 글자가 접힌다. */
 function addViewButtons() {
   const tools = document.getElementById('tools');
   const mk = (label, title, fn) => {
     const b = document.createElement('button');
-    b.className = 'btn'; b.textContent = label; b.title = title;
+    b.className = 'btn'; b.title = title;
+    b.innerHTML = label;
     b.addEventListener('click', fn);
     tools.insertBefore(b, tools.firstChild);
     return b;
   };
+  const tag = (icon, word) => '<i>' + icon + '</i><u>' + escapeHTML(word) + '</u>';
+  const btnCSS = document.createElement('style');
+  btnCSS.textContent =
+    '#tools .btn{display:inline-flex;align-items:center;gap:5px;padding:9px 12px;white-space:nowrap}' +
+    '#tools .btn i{font-style:normal;font-size:13px;opacity:.85}' +
+    '#tools .btn u{text-decoration:none;font-size:12.5px;font-weight:600}' +
+    '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}';
+  document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
-  mk('⇢', L.s('길', 'Journeys'), openRoutes);
-  mk('☰', L.s('무엇을 띄울지 고르기', 'What to show'), openLayers);
-  lookBtn = mk('◎', L.s('둘러보기 — 제자리에서 사방을 본다', 'Look around'), () => {
+  mk(tag('⇢', L.s('길', 'Journeys')), L.s('여정과 경로', 'Journeys and routes'), openRoutes);
+  mk(tag('☰', L.s('표시', 'Display')), L.s('지도에 무엇을 띄울지', 'What the map shows'), openLayers);
+  lookBtn = mk(tag('◎', L.s('둘러보기', 'Look')),
+    L.s('제자리에서 사방을 봅니다', 'Turn in place'), () => {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
-  qualBtn = mk(QUAL_NAME()[QUAL], L.s('화질 — 누르면 하·중·상으로 돕니다', 'Detail'), () => {
+  qualBtn = mk(tag('◍', L.s('화질 ', 'Detail ') + QUAL_NAME()[QUAL]),
+    L.s('지형을 얼마나 자세히 그릴지', 'How detailed the land is'), () => {
     // 화면을 갈아엎지 않는다. 보던 자리 그대로 그림만 바뀐다.
     setQual(QUALS[(QUALS.indexOf(QUAL) + 1) % 3]);
   });
@@ -1070,13 +1085,18 @@ document.getElementById('langBtn').onclick = () => {
   localStorage.setItem('theland.lang', L.cur);
   applyLang();
 };
+// 처음 단추에도 글자를 붙인다
+document.getElementById('homeBtn').innerHTML = '<i>⌂</i><u>' + '처음' + '</u>';
 document.getElementById('homeBtn').onclick = () => {
   const s = siteByName.get('예루살렘');
   if (s) flyTo(s, 260); else { cam.tx = 0; cam.tz = 0; cam.dist = 260; applyCam(); }
 };
 function applyLang() {
-  document.getElementById('langBtn').textContent = L.cur === 'ko' ? 'EN' : '한';
+  document.getElementById('langBtn').innerHTML =
+    L.cur === 'ko' ? '<i>EN</i><u>English</u>' : '<i>한</i><u>한국어</u>';
   document.documentElement.lang = L.cur;
+  document.getElementById('homeBtn').innerHTML =
+    '<i>⌂</i><u>' + L.s('처음', 'Home') + '</u>';
   document.title = L.s('약속의 땅', 'The Promised Land');
   qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
                         'A place, a person, a word — or a whole line');
@@ -1521,6 +1541,115 @@ function buildPins() {
   for (let i = 0; i < routeStops.length; i++) if (stopKm[i] == null) stopKm[i] = null;
 }
 
+
+// ── 지파와 민족의 땅 ───────────────────────────────────────
+//
+// 앱은 지파·민족을 **색으로 칠한 땅**으로 보여 준다. 이름만 띄우면 어디부터
+// 어디까지인지 알 수가 없다. 경계 다각형과 색을 그대로 가져와 땅에 입힌다.
+let AREAS = { tribes: [], nations: [] };
+const areaMesh = { tribe: null, nation: null };
+
+function drapeArea(ring, color, opacity) {
+  const tri = earClip(ring);
+  const pos = [], edge = [], idx = [];
+  for (const p of ring) { pos.push(worldX(p[1]), 0, worldZ(p[0])); edge.push(0); }
+  for (const t of tri) idx.push(t[0], t[1], t[2]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
+  g.setIndex(idx);
+  const mat = drapeMaterial(color, opacity, 0.006, false);
+  drapeMats.push(mat);
+  const m = new THREE.Mesh(g, mat);
+  m.renderOrder = 2;
+  m.frustumCulled = false;
+  return m;
+}
+
+function buildAreas(kind) {
+  const list = kind === 'tribe' ? AREAS.tribes : AREAS.nations;
+  const g = new THREE.Group();
+  for (const a of list) {
+    if (!a.poly || a.poly.length < 3) continue;
+    const c = new THREE.Color(a.color[0], a.color[1], a.color[2]);
+    // 땅빛을 덮지 않도록 옅게 — 경계가 보이면 그만이다
+    g.add(drapeArea(a.poly, c.getHex(), 0.34));
+    // 테두리를 한 줄 둘러 어디까지인지 또렷하게
+    const ring = a.poly.map(p => ({ lat: p[0], lon: p[1] }));
+    ring.push(ring[0]);
+    const line = drapeLine(smoothPath(ring, 0.6), 0.9, c.getHex(), 0.01,
+                           { opacity: 0.9, order: 3 });
+    g.add(line);
+  }
+  return g;
+}
+
+function syncAreas() {
+  for (const kind of ['tribe', 'nation']) {
+    const layer = LAYERS.find(l => l.k === kind);
+    const want = !!(layer && layer.on);
+    if (want && !areaMesh[kind]) {
+      areaMesh[kind] = buildAreas(kind);
+      scene.add(areaMesh[kind]);
+    } else if (!want && areaMesh[kind]) {
+      scene.remove(areaMesh[kind]);
+      disposeObj(areaMesh[kind]);
+      areaMesh[kind] = null;
+    }
+  }
+}
+
+// ── 따라가는 자리 표식과 걸음 빠르기 ────────────────────────
+let runnerEl = null, speedIdx = 1;
+const SPEEDS = [0.5, 1, 2, 4];
+
+function syncRunner() {
+  if (!runnerEl) {
+    runnerEl = document.createElement('div');
+    runnerEl.id = 'runner';
+    labelRoot.appendChild(runnerEl);
+    const st = document.createElement('style');
+    st.textContent =
+      '#runner{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;' +
+      'border-radius:13px;display:none;pointer-events:none;' +
+      'background:radial-gradient(circle,#fff8e2 0 34%,rgba(255,210,122,.65) 36% 62%,' +
+      'rgba(255,210,122,0) 64%);box-shadow:0 0 14px rgba(255,200,90,.8)}' +
+      '#runner.on{display:block;animation:rpulse 1.4s ease-in-out infinite}' +
+      '@keyframes rpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.28)}}' +
+      '#spdBtn{position:fixed;left:50%;bottom:74px;margin-left:96px;z-index:26;' +
+      'display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
+      'padding:0 13px;height:42px;border-radius:21px;background:rgba(20,20,24,.9);' +
+      'color:var(--ink);font:700 13px/1 inherit}' +
+      '#spdBtn.on{display:block}' +
+      '@media (max-width:560px){#spdBtn{bottom:84px;margin-left:88px}}';
+    document.head.appendChild(st);
+  }
+  if (!following || !routePts) { runnerEl.className = ''; return; }
+  const p = followAt(followKm);
+  const v = new THREE.Vector3(worldX(p.lon), groundY(p.lat, p.lon) + 0.15, worldZ(p.lat));
+  v.project(camera);
+  if (v.z > 1) { runnerEl.className = ''; return; }
+  runnerEl.className = 'on';
+  runnerEl.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
+  runnerEl.style.top = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
+}
+
+let spdBtn = null;
+function syncSpeedBtn() {
+  if (!spdBtn) {
+    spdBtn = document.createElement('button');
+    spdBtn.id = 'spdBtn';
+    spdBtn.addEventListener('click', () => {
+      speedIdx = (speedIdx + 1) % SPEEDS.length;
+      syncSpeedBtn();
+    });
+    document.body.appendChild(spdBtn);
+  }
+  spdBtn.className = (routePts && routePts.length > 1) ? 'on' : '';
+  spdBtn.textContent = '×' + SPEEDS[speedIdx];
+  spdBtn.title = L.s('걸음 빠르기', 'Travel speed');
+}
+
 // 길이 서면 지도 위에 바로 뜨는 단추. 판을 열고 또 누를 까닭이 없다.
 let goBtn = null;
 function syncGoBtn() {
@@ -1549,6 +1678,8 @@ function syncGoBtn() {
 
 function updateStopMarks() {
   syncGoBtn();
+  syncSpeedBtn();
+  syncRunner();
   const need = routeStops.length;
   while (markPool.length < need) {
     const el = document.createElement('div');
@@ -1652,7 +1783,7 @@ function stepFollow() {
   const dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
   // 마흔 초쯤에 다 걷도록 — 길이가 얼마든 지루하지 않게
-  followKm += dt * Math.max(2, followTotal / 40);
+  followKm += dt * Math.max(2, followTotal / 40) * SPEEDS[speedIdx];
   if (followKm >= followTotal) { followKm = followTotal; following = false; }
 
   const p = followAt(followKm);
@@ -2022,7 +2153,7 @@ document.getElementById('pb').addEventListener('click', ev => {
   const lr = ev.target.closest('.lrow');
   if (lr) {
     const l = LAYERS.find(x => x.k === lr.dataset.layer);
-    if (l) { l.on = !l.on; syncLayers(); updateLabels(); openLayers(); }
+    if (l) { l.on = !l.on; syncLayers(); syncAreas(); updateLabels(); openLayers(); }
     return;
   }
   const del = ev.target.dataset.del;
@@ -2051,6 +2182,9 @@ labSizeCSS.textContent =
   '.lab.r5{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e6d3a8}' +
   '.lab.r6{font-size:17px;font-weight:700;letter-spacing:.14em;color:#e0b9a0}' +
   '.lab.r7{font-size:14px;font-weight:600;color:#a9cfe0;letter-spacing:.05em}' +
+  // 손으로 고른 곳은 눈에 띄게 커진다
+  '.lab.on{transform:translate(-50%,-50%) scale(1.5);z-index:3;' +
+  'text-shadow:0 1px 4px #000,0 0 14px #000,0 0 22px rgba(0,0,0,.9)}' +
   '@media (max-width:560px){.lab.r0{font-size:16px}.lab.r1{font-size:13.5px}' +
   '.lab.r2{font-size:12px}.lab.r3{font-size:11px}' +
   '.lab.r4,.lab.r8,.lab.r9{font-size:13px}.lab.r5,.lab.r6{font-size:14.5px}}';
@@ -2124,6 +2258,7 @@ function tick() {
     const canaanClip = tileRect(canaan);
 
     addLakes();
+    syncAreas();
     bindControls();
     addViewButtons();
     applyLang();
