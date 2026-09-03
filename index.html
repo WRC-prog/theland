@@ -167,7 +167,14 @@
   // 자료 파일은 주소만 알면 그냥 받아진다. 모르는 사람이 우연히 들어오는
   // 것을 막는 정도로만 쓸 것. 암호 자체는 적어 두지 않고 뒤섞은 값만 둔다.
   (function () {
-    var KEY = '1y8ryty';
+    var KEY  = '1y8ryty';                 // 들어오는 암호
+    var AKEY = '18j4v88';                 // 관리용 암호 — 보이는 지도는 똑같고
+                                          // 「관리」 단추가 하나 더 붙는다
+    // 셈은 이 쪽에서 할 수 없다. 깃허브 페이지는 파일을 내주기만 할 뿐
+    // 아무것도 기억하지 못하는 곳이라, 바깥의 조그만 셈 지기를 빌린다.
+    var NS = 'theland-wrc-8f3a';
+    var CNT = 'https://abacus.jasoncameron.dev/';
+
     var gate = document.getElementById('gate');
     var pw   = document.getElementById('pw');
     var no   = document.getElementById('gateNo');
@@ -177,25 +184,54 @@
       for (var i = 0; i < t.length; i++) h = ((h * 33) ^ t.codePointAt(i)) >>> 0;
       return h.toString(36);
     }
-    function open() {
+    function ymd(d) {
+      return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+                             + '-' + ('0' + d.getDate()).slice(-2);
+    }
+    function bump(k) {
+      try { fetch(CNT + 'hit/' + NS + '/' + k, { cache: 'no-store' }).catch(function () {}); }
+      catch (e) {}
+    }
+    // 들어올 때마다 한 번, 그리고 이 기기가 처음이면 한 번 더.
+    // 관리용 암호로 들어온 것은 세지 않는다 — 제 발자국까지 세면 소용이 없다.
+    function countVisit() {
+      bump('visits-total');
+      bump('day-' + ymd(new Date()));
+      try {
+        if (!localStorage.getItem('theland.seen')) {
+          localStorage.setItem('theland.seen', '1');
+          bump('people-total');
+        }
+      } catch (e) {}
+    }
+    function open(admin, fresh) {
+      window.__ADMIN = !!admin;
+      window.__NS = NS;
+      window.__CNT = CNT;
       gate.remove();
+      if (fresh && !admin) countVisit();
       var s = document.createElement('script');
       // 깃허브는 파일을 십 분쯤 물고 있는다. 새로 올려도 옛 것이 돌아
       // 「고쳤는데 그대로네」 하기 십상이라, app.js 만은 늘 새로 받는다.
       s.src = 'app.js?v=' + Math.floor(Date.now() / 60000);
       document.body.appendChild(s);
     }
-    try { if (sessionStorage.getItem('theland.ok') === KEY) return open(); } catch (e) {}
+    try {
+      var was = sessionStorage.getItem('theland.ok');
+      if (was === KEY)  return open(false, false);
+      if (was === AKEY) return open(true, false);
+    } catch (e) {}
 
     document.getElementById('gateForm').addEventListener('submit', function (ev) {
       ev.preventDefault();
-      if (scramble(pw.value.trim()) !== KEY) {
+      var h = scramble(pw.value.trim());
+      if (h !== KEY && h !== AKEY) {
         no.textContent = '암호가 다릅니다';
         pw.value = ''; pw.focus();
         return;
       }
-      try { sessionStorage.setItem('theland.ok', KEY); } catch (e) {}
-      open();
+      try { sessionStorage.setItem('theland.ok', h); } catch (e) {}
+      open(h === AKEY, true);
     });
     pw.focus();
   })();
