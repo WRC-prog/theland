@@ -1191,6 +1191,23 @@ function zoomAt(f, cx, cy) {
 /** 화면 위 단추 — 마우스가 없는 화면에서도 다가가고 기울일 수 있게 */
 /** 위쪽 단추 — 그림쇠만 두면 눌러 보기 전에는 무엇인지 알 수가 없다.
  *  그림쇠 옆에 **글자**를 붙인다. 좁은 화면에서는 글자가 접힌다. */
+// 툴바 그림 — 기호 글자를 쓰면 글자꼴마다 크기도 밑선도 달라 제각각으로 보인다.
+// 같은 16×16 칸에 같은 굵기로 그려 둔다.
+const ICO = {
+  home:   '<path d="M2.3 7.5 8 2.6l5.7 4.9"/><path d="M3.9 6.9v6.5h8.2V6.9"/>' +
+          '<path d="M6.6 13.4V9.7h2.8v3.7"/>',
+  relief: '<path d="M1.5 13.2 6 5.1l2.7 4.7 1.7-2.7 4.1 6.1z"/>',
+  look:   '<path d="M1 8s2.6-4.4 7-4.4S15 8 15 8s-2.6 4.4-7 4.4S1 8 1 8z"/>' +
+          '<circle cx="8" cy="8" r="2"/>',
+  layers: '<path d="M2.2 4.3h11.6M2.2 8h11.6M2.2 11.7h11.6"/>',
+  route:  '<path d="M3.2 13.4c0-3.5 3-3.5 3-6.2s-3-2.7-3-4.6"/>' +
+          '<path d="M6.6 2.6h6.3M10.9 1l2 1.6-2 1.6"/>'
+};
+function svgIco(d) {
+  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+         'stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+}
+
 const TOOLBTNS = [];
 /** 말을 바꾸면 툴바 이름도 함께 바뀌게 */
 function syncToolLabels() {
@@ -1213,8 +1230,13 @@ function addViewButtons() {
   const btnCSS = document.createElement('style');
   btnCSS.textContent =
     '#tools .btn{display:inline-flex;align-items:center;gap:5px;padding:9px 12px;white-space:nowrap}' +
-    '#tools .btn i{font-style:normal;font-size:13px;opacity:.85}' +
+    // 그림은 저마다 같은 칸 안에 놓여 밑선이 어긋나지 않는다
+    '#tools .btn i{display:inline-flex;align-items:center;justify-content:center;' +
+    'width:18px;height:18px;flex:0 0 18px;font-style:normal;opacity:.9;line-height:1}' +
+    '#tools .btn i svg{width:16px;height:16px;display:block}' +
+    '#tools .btn i.txt{font:700 11.5px/1 inherit;letter-spacing:-.02em}' +
     '#tools .btn u{text-decoration:none;font-size:12.5px;font-weight:600}' +
+    '#tools .btn u.big{font-size:14px;font-weight:700}' +
     '@media (max-width:700px){#tools .btn u{display:none}#tools .btn{padding:9px 10px}}' +
     // 폰에서는 찾기 칸이 단추들에 밀려 손톱만 해진다. 아래로 한 줄 내려
     // 화면 너비를 다 쓰게 한다. 글씨도 16px — 그보다 작으면 사파리가
@@ -1228,16 +1250,16 @@ function addViewButtons() {
   document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
-  mk(() => tag('⇢', L.s('길', 'Journeys')),
+  mk(() => tag(svgIco(ICO.route), L.s('길', 'Journeys')),
      () => L.s('여정과 경로', 'Journeys and routes'), openRoutes);
-  mk(() => tag('☰', L.s('표시', 'Display')),
+  mk(() => tag(svgIco(ICO.layers), L.s('표시', 'Display')),
      () => L.s('지도에 무엇을 띄울지', 'What the map shows'), openLayers);
-  lookBtn = mk(() => tag('◎', L.s('둘러보기', 'Look')),
+  lookBtn = mk(() => tag(svgIco(ICO.look), L.s('둘러보기', 'Look')),
     () => L.s('제자리에서 사방을 봅니다', 'Turn in place'), () => {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
-  const hypsBtn = mk(() => tag('▲', L.s('표고', 'Relief')),
+  const hypsBtn = mk(() => tag(svgIco(ICO.relief), L.s('표고', 'Relief')),
     () => L.s('땅 높이를 색으로 봅니다', 'Colour the land by height'), () => {
     HYPS = !HYPS;
     try { localStorage.setItem('theland.hyps', HYPS ? '1' : '0'); } catch (e) {}
@@ -1532,17 +1554,19 @@ document.getElementById('langBtn').onclick = () => {
   applyLang();
 };
 // 처음 단추에도 글자를 붙인다
-document.getElementById('homeBtn').innerHTML = '<i>⌂</i><u>' + '예루살렘' + '</u>';
+document.getElementById('homeBtn').innerHTML =
+  '<i>' + svgIco(ICO.home) + '</i><u class="big">예루살렘</u>';
 onTap(document.getElementById('homeBtn'), () => {
   const s = siteByName.get('예루살렘');
   if (s) flyTo(s, 260); else { cam.tx = 0; cam.tz = 0; cam.dist = 260; applyCam(); }
 });
 function applyLang() {
   document.getElementById('langBtn').innerHTML =
-    L.cur === 'ko' ? '<i>EN</i><u>English</u>' : '<i>한</i><u>한국어</u>';
+    L.cur === 'ko' ? '<i class="txt">EN</i><u>English</u>'
+                   : '<i class="txt">한</i><u>한국어</u>';
   document.documentElement.lang = L.cur;
   document.getElementById('homeBtn').innerHTML =
-    '<i>⌂</i><u>' + L.s('예루살렘', 'Jerusalem') + '</u>';
+    '<i>' + svgIco(ICO.home) + '</i><u class="big">' + L.s('예루살렘', 'Jerusalem') + '</u>';
   syncToolLabels();
   document.title = L.s('약속의 땅', 'The Promised Land');
   qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
