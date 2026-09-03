@@ -1258,30 +1258,131 @@ function disposeObj(o) {
   o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material) x.material.dispose(); });
 }
 
+
+// ── 경로 리본 — 앱과 같은 갈매기표 ─────────────────────────
+//
+// 삼각형을 하나씩 박아 넣던 것은 조잡했다. 앱은 **갈매기표가 새겨진 띠**를
+// 길 위에 흘려보낸다. 여기서도 그렇게 한다 — 128×32 짜리 무늬 한 장을
+// 길이만큼 되풀이해 붙이면, 굽은 데서도 화살표가 저절로 길을 따라 휜다.
+let chevTex = null;
+function chevronTexture() {
+  if (chevTex) return chevTex;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 32;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(252,189,77,0.92)';
+  g.fillRect(0, 0, 128, 32);
+  g.fillStyle = 'rgba(71,43,13,0.55)';
+  for (let k = 0; k < 2; k++) {
+    const x0 = k * 64 + 12;
+    g.beginPath();
+    g.moveTo(x0, 5); g.lineTo(x0 + 20, 16); g.lineTo(x0, 27);
+    g.lineTo(x0 + 8, 27); g.lineTo(x0 + 28, 16); g.lineTo(x0 + 8, 5);
+    g.closePath(); g.fill();
+  }
+  chevTex = new THREE.CanvasTexture(c);
+  chevTex.wrapS = THREE.RepeatWrapping;
+  chevTex.wrapT = THREE.ClampToEdgeWrapping;
+  chevTex.minFilter = THREE.LinearFilter;
+  return chevTex;
+}
+
+function chevronMaterial(lift, period) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: {
+      hA: { value: hTexA }, bA: { value: hBoundA || new THREE.Vector4(0,0,1,1) },
+      hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
+      hasB: { value: hTexB ? 1 : 0 },
+      vex: { value: VEXAG }, lift: { value: lift },
+      map: { value: chevronTexture() }, period: { value: period }
+    },
+    vertexShader: [
+      'uniform sampler2D hA; uniform vec4 bA;',
+      'uniform sampler2D hB; uniform vec4 bB;',
+      'uniform float hasB, vex, lift, period;',
+      'attribute vec2 uv2;',
+      'varying vec2 vT;',
+      'float dec(vec3 c){ return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0; }',
+      'void main(){',
+      '  vec3 p = position;',
+      '  vec2 ua = vec2((p.x - bA.x) / bA.z, 1.0 - (p.z - bA.y) / bA.w);',
+      '  float h;',
+      '  if (ua.x > 0.001 && ua.x < 0.999 && ua.y > 0.001 && ua.y < 0.999) {',
+      '    h = dec(texture2D(hA, ua).rgb);',
+      '  } else if (hasB > 0.5) {',
+      '    vec2 ub = vec2((p.x - bB.x) / bB.z, 1.0 - (p.z - bB.y) / bB.w);',
+      '    h = dec(texture2D(hB, clamp(ub, 0.001, 0.999)).rgb);',
+      '  } else { h = 0.0; }',
+      '  p.y = h * 0.001 * vex + lift;',
+      '  vT = vec2(uv2.x / period, uv2.y);',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
+      '}'
+    ].join('\n'),
+    fragmentShader: [
+      'uniform sampler2D map;',
+      'varying vec2 vT;',
+      'void main(){',
+      '  vec4 t = texture2D(map, vT);',
+      '  if (t.a < 0.02) discard;',
+      '  gl_FragColor = t;',
+      '}'
+    ].join('\n')
+  });
+}
+
+/** 갈매기표 띠 하나 */
+function chevronRibbon(pts, widthKm, lift) {
+  const pos = [], uv2 = [], idx = [];
+  let arc = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (i) arc += kmLL(pts[i - 1], pts[i]);
+    const p = pts[i], q = pts[Math.min(i + 1, pts.length - 1)], o = pts[Math.max(i - 1, 0)];
+    let dx = worldX(q.lon) - worldX(o.lon), dz = worldZ(q.lat) - worldZ(o.lat);
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
+    const x = worldX(p.lon), z = worldZ(p.lat);
+    pos.push(x + nx, 0, z + nz); uv2.push(arc, 0);
+    pos.push(x - nx, 0, z - nz); uv2.push(arc, 1);
+    if (i < pts.length - 1) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv2', new THREE.Float32BufferAttribute(uv2, 2));
+  g.setIndex(idx);
+  // 앱과 같은 되풀이 간격 — 너비의 2.4 배마다 갈매기표 두 개
+  const m = new THREE.Mesh(g, chevronMaterial(lift, Math.max(widthKm * 2.4, 1e-4)));
+  m.renderOrder = 7;
+  m.frustumCulled = false;
+  return m;
+}
+
 // ── 들르는 곳 표시 ────────────────────────────────────────
 //
 // 길만 그어 놓으면 어디가 출발이고 어디가 도착인지 알 수가 없다.
 // 앱처럼 **눈에 바로 보이게** — 땅에는 기둥을, 화면에는 이름표를 세운다.
 const markPool = [];
-let markPins = null;
+let markPins = null, stopKm = [];
 const SLOT_COLOR = { start: 0x6fd08a, via: 0xf2b64c, end: 0xff8a6a };
 
+// 땅에 꽂던 고깔은 걷어냈다 — 앱도 그런 것을 세우지 않는다.
+// 들르는 곳은 **이름표**가 말해 주고, 고깔은 따라갈 때 지금 있는 자리에만 쓴다.
 function buildPins() {
   if (markPins) { scene.remove(markPins); disposeObj(markPins); markPins = null; }
-  if (!routeStops.length) return;
-  markPins = new THREE.Group();
-  for (const s of routeStops) {
-    const slot = slotOf(s) || 'via';
-    const g = new THREE.ConeGeometry(0.55, 2.4, 6);
-    g.translate(0, 1.2, 0);
-    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-      color: SLOT_COLOR[slot], transparent: true, opacity: 0.92, depthTest: false }));
-    m.position.set(s.x, s.y + 0.1, s.z);
-    m.renderOrder = 8;
-    m.frustumCulled = false;
-    markPins.add(m);
+  // 들를 곳마다 시작에서 여기까지 몇 km 인지 재 둔다 (이름표에 적는다)
+  stopKm = [];
+  if (!routePts || !routeStops.length) return;
+  let acc = 0, k = 0;
+  stopKm[0] = 0;
+  for (let i = 1; i < routePts.length && k < routeStops.length; i++) {
+    acc += kmLL(routePts[i - 1], routePts[i]);
+    const s = routeStops[k + 1];
+    if (!s) break;
+    if (Math.abs(routePts[i].lat - s.lat) < 0.02 && Math.abs(routePts[i].lon - s.lon) < 0.02) {
+      k++; stopKm[k] = acc;
+    }
   }
-  scene.add(markPins);
+  for (let i = 0; i < routeStops.length; i++) if (stopKm[i] == null) stopKm[i] = null;
 }
 
 function updateStopMarks() {
@@ -1305,12 +1406,13 @@ function updateStopMarks() {
     v.set(s.x, s.y + 2.6, s.z).project(camera);
     if (v.z > 1 || v.x < -1.2 || v.x > 1.2 || v.y < -1.2 || v.y > 1.2) { el.style.display = 'none'; continue; }
     const slot = slotOf(s) || 'via';
-    const nth = slot === 'via' ? plan.via.indexOf(s) + 1 : 0;
+    const km = stopKm[i];
+    const sub = slot === 'start' ? L.s('출발', 'Start')
+              : slot === 'end'   ? L.s('도착', 'End') : L.s('경유', 'Via');
     el.className = 'rmark ' + slot;
-    el.textContent = (slot === 'start' ? L.s('출발', 'Start')
-                    : slot === 'end'   ? L.s('도착', 'End')
-                    : L.s('경유', 'Via') + (plan.via.length > 1 && nth ? ' ' + nth : ''))
-                    + ' · ' + L.place(s.ko);
+    el.innerHTML = '<b>' + (i + 1) + '</b><span><em>' + escapeHTML(L.place(s.ko)) + '</em>' +
+      escapeHTML(sub + (km ? ' · ' + (km < 10 ? km.toFixed(1) : Math.round(km)) + ' km' : '')) +
+      '</span>';
     el.style.display = '';
     el.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
     el.style.top  = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
@@ -1319,10 +1421,23 @@ function updateStopMarks() {
 
 const markCSS = document.createElement('style');
 markCSS.textContent =
-  '.rmark{position:absolute;transform:translate(-50%,-100%);white-space:nowrap;pointer-events:auto;' +
-  'cursor:pointer;font:600 11.5px/1 system-ui;padding:5px 9px;border-radius:11px;' +
-  'color:#10130f;box-shadow:0 2px 10px rgba(0,0,0,.55);z-index:2}' +
-  '.rmark.start{background:#6fd08a}.rmark.via{background:#f2b64c}.rmark.end{background:#ff8a6a}';
+  // 앱의 지점 표지 그대로 — 어두운 알약에 갈래빛 테두리, 번호 뱃지,
+  // 세리프 이름, 그 아래 갈래와 누적 거리.
+  '.rmark{position:absolute;transform:translate(-50%,-118%);white-space:nowrap;' +
+  'pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:9px;' +
+  'padding:6px 12px 6px 6px;border-radius:15px;background:rgba(13,13,18,.84);' +
+  'box-shadow:0 3px 14px rgba(0,0,0,.6);z-index:2;backdrop-filter:blur(6px)}' +
+  '.rmark b{display:flex;align-items:center;justify-content:center;width:22px;height:22px;' +
+  'border-radius:11px;font:700 12px/1 system-ui;color:#111}' +
+  '.rmark span{display:flex;flex-direction:column;gap:1px;font:500 10.5px/1.25 system-ui}' +
+  '.rmark em{font:600 13px/1.2 Georgia,"Apple SD Gothic Neo",serif;font-style:normal;' +
+  'color:#fff;letter-spacing:.02em}' +
+  '.rmark.start{border:1.5px solid rgba(133,224,140,.85)} .rmark.start b{background:#85e08c}' +
+  '.rmark.start span{color:#85e08c}' +
+  '.rmark.via{border:1.5px solid rgba(255,212,102,.85)} .rmark.via b{background:#ffd466}' +
+  '.rmark.via span{color:#ffd466}' +
+  '.rmark.end{border:1.5px solid rgba(255,143,112,.85)} .rmark.end b{background:#ff8f70}' +
+  '.rmark.end span{color:#ff8f70}';
 document.head.appendChild(markCSS);
 
 // ── 따라가기 ──────────────────────────────────────────────
@@ -1413,12 +1528,12 @@ function drawRoute() {
   ribbonDist = cam.dist;
   // 굵은 형광펜 한 줄이 아니라 **길잡이 화살표**로 — 어느 쪽으로 가는지가
   // 먼저 보여야 한다. 가느다란 실선 위에 화살표를 촘촘히 박는다.
-  const w = Math.max(0.26, cam.dist * 0.0020);
+  // 앱과 같은 모양 — 어두운 테두리 위에 갈매기표 띠
+  const w = Math.max(0.5, cam.dist * 0.0055);
   routeMesh = new THREE.Group();
-  routeMesh.add(drapeLine(routePts, w * 2.2, 0xf2b64c, 0.02,
-                          { through: true, opacity: 0.70, order: 6 }));
-  routeMesh.add(makeArrows(routePts, Math.max(0.9, cam.dist * 0.0075), 0xffd27a, 0.10,
-                           { through: true, opacity: 0.95, order: 7 }));
+  routeMesh.add(drapeLine(routePts, w * 1.5, 0x2a1b08, 0.018,
+                          { through: true, opacity: 0.72, order: 6 }));
+  routeMesh.add(chevronRibbon(routePts, w, 0.022));
   scene.add(routeMesh);
 }
 
