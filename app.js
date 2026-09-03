@@ -642,6 +642,7 @@ function updateRegions() {
   //  · 한참 물러서서 볼 때는 620 m 짜리 세계 판으로 충분하다 — 부르지 않는다.
   //  · 한 번에 하나씩만 받는다.
   if (cam.dist > 900) return;
+  if (following) return;                    // 걷는 중에는 멎게 하지 않는다
   for (const v of regionLoaded.values()) if (v === 'loading') return;
   const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
   const near = 0.5 + cam.dist / 200;          // 다가가는 쪽만 미리 챙긴다
@@ -669,7 +670,8 @@ function updateRegions() {
       worldClips.push(tileRect(t));
       // 다음 판은 이 판을 다 세운 뒤에 (한 번에 하나씩)
       applyWorldClips();
-      buildGrid(t, tex.image, Math.min(segX, 900), Math.min(segZ, 900));
+      // 높이 격자는 성기게 — 이천만 화소를 900×900 으로 훑으면 폰이 멎는다
+      buildGrid(t, tex.image, Math.min(segX, 520), Math.min(segZ, 520));
       placeSites();
     }).catch(() => { regionLoaded.set(t.file, 'none'); });   // 없는 판을 되풀이해 찾지 않는다
   }
@@ -2042,7 +2044,10 @@ function syncGoBtn() {
   if (!goBtn) {
     goBtn = document.createElement('button');
     goBtn.id = 'goBtn';
-    onTap(goBtn, () => { toggleFollow(); syncGoBtn();
+    onTap(goBtn, () => {
+      toggleFollow(); syncGoBtn();
+      toast(following ? L.s('길을 따라갑니다', 'Travelling the route')
+                      : L.s('멈췄습니다', 'Stopped'));
       if (panelIsRoutes && panel.classList.contains('open')) openRoutes(); });
     document.body.appendChild(goBtn);
     const st = document.createElement('style');
