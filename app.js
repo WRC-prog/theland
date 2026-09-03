@@ -1805,7 +1805,10 @@ function tick() {
 
     placeSites();                       // 높이는 아직 0 — 지형을 읽고 다시 매긴다
 
-    const texC = await loadTexture(qualFile(canaan.file));
+    // 고른 화질의 그림이 아직 안 올라가 있으면 본이름으로 물러선다 —
+    // 그림 한 장 없다고 지도가 통째로 안 뜨면 안 된다.
+    const texC = await loadTexture(qualFile(canaan.file))
+      .catch(() => loadTexture(canaan.file));
     say(L.s('가나안 지형', 'Canaan terrain'), 65);
     baseCanaan = makeTerrain(canaan, 600, 680, texC);
     canaanTex = texC; canaanTile = canaan;
@@ -1839,7 +1842,9 @@ function tick() {
       toggleRoads();        // 옛길은 앱처럼 처음부터 깔아 둔다
       applyCam();
 
-      loadTexture(qualFile(region.file)).then(texR => {
+      loadTexture(qualFile(region.file))
+      .catch(() => loadTexture(region.file))
+      .then(texR => {
         // 3280×1760 짜리 그림을 420×240 으로 세우면 여덟 칸에 꼭짓점 하나다.
       // 가나안 밖이 유독 뭉개져 보이던 까닭이 그것이다. 그림만큼 세운다.
       hTexB = texR; hBoundB = tileBounds(region);
