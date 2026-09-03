@@ -184,32 +184,39 @@
       for (var i = 0; i < t.length; i++) h = ((h * 33) ^ t.codePointAt(i)) >>> 0;
       return h.toString(36);
     }
-    function ymd(d) {
-      return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
-                             + '-' + ('0' + d.getDate()).slice(-2);
-    }
     function bump(k) {
       try { fetch(CNT + 'hit/' + NS + '/' + k, { cache: 'no-store' }).catch(function () {}); }
       catch (e) {}
     }
-    // 들어올 때마다 한 번, 그리고 이 기기가 처음이면 한 번 더.
-    // 관리용 암호로 들어온 것은 세지 않는다 — 제 발자국까지 세면 소용이 없다.
-    function countVisit() {
-      bump('visits-total');
-      bump('day-' + ymd(new Date()));
-      try {
-        if (!localStorage.getItem('theland.seen')) {
-          localStorage.setItem('theland.seen', '1');
-          bump('people-total');
-        }
-      } catch (e) {}
+    // 지금 몇 사람이 열어 두고 있는가.
+    //
+    // 셈 지기는 「하나 늘려 주시오」밖에 못 한다 — 누가 나갔는지는 모른다.
+    // 그래서 **분 단위 칸**을 쓴다. 열려 있는 창은 한 분에 딱 한 번 그 분의
+    // 칸을 하나 늘린다. 그러면 지난 한 분의 칸에 적힌 수가 곧 그동안
+    // 열려 있던 창의 수다. 창을 닫으면 다음 분부터 저절로 빠진다.
+    function minuteKey(d) {
+      return 'm-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2)
+                  + ('0' + d.getDate()).slice(-2) + ('0' + d.getHours()).slice(-2)
+                  + ('0' + d.getMinutes()).slice(-2);
+    }
+    function heartbeat() {
+      var last = null;
+      function beat() {
+        var k = minuteKey(new Date());
+        if (k === last) return;            // 한 분에 한 번만
+        last = k;
+        bump(k);
+      }
+      beat();
+      setInterval(beat, 15000);
     }
     function open(admin, fresh) {
       window.__ADMIN = !!admin;
       window.__NS = NS;
       window.__CNT = CNT;
+      window.__MKEY = minuteKey;
       gate.remove();
-      if (fresh && !admin) countVisit();
+      if (!admin) heartbeat();
       var s = document.createElement('script');
       // 깃허브는 파일을 십 분쯤 물고 있는다. 새로 올려도 옛 것이 돌아
       // 「고쳤는데 그대로네」 하기 십상이라, app.js 만은 늘 새로 받는다.
