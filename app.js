@@ -1108,7 +1108,7 @@ function makeJoy() {
   joyEl.id = 'joy';
   joyKnob = document.createElement('i');
   joyEl.appendChild(joyKnob);
-  document.body.appendChild(joyEl);
+  dockEl().appendChild(joyEl);
 
   travelEl = document.createElement('div');
   travelEl.id = 'travel';
@@ -1118,7 +1118,7 @@ function makeJoy() {
     travelIdx = +b.dataset.tv;
     syncTravel();
   });
-  document.body.appendChild(travelEl);
+  dockEl().appendChild(travelEl);
 
   eyeEl = document.createElement('div');
   eyeEl.id = 'eyeh';
@@ -1128,7 +1128,7 @@ function makeJoy() {
     eyeIdx = +b.dataset.ey;
     syncTravel(); applyCam();
   });
-  document.body.appendChild(eyeEl);
+  dockEl().appendChild(eyeEl);
 
   let id = null;
   const R = 44;
@@ -1160,17 +1160,17 @@ function makeJoy() {
 
   const st = document.createElement('style');
   st.textContent =
-    '#joy{position:fixed;left:16px;bottom:96px;width:112px;height:112px;z-index:27;' +
+    '#joy{position:relative;width:112px;height:112px;order:9;' +
     'display:none;border-radius:56px;border:1px solid rgba(255,255,255,.2);' +
     'background:rgba(20,20,24,.55);backdrop-filter:blur(10px);touch-action:none}' +
     '#joy.on{display:block}' +
     '#joy i{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;' +
     'border-radius:22px;background:rgba(253,204,97,.92);box-shadow:0 2px 10px rgba(0,0,0,.45);' +
     'pointer-events:none;transition:transform .05s linear}' +
-    '#travel,#eyeh{position:fixed;left:16px;z-index:27;display:none;gap:2px;' +
-    'align-items:center;padding:3px 3px 3px 10px;border-radius:19px;' +
+    '#travel,#eyeh{display:none;gap:2px;align-items:center;' +
+    'padding:3px 3px 3px 10px;border-radius:19px;' +
     'border:1px solid rgba(255,255,255,.18);background:rgba(20,20,24,.9)}' +
-    '#travel{bottom:54px}#eyeh{bottom:14px}' +
+    '#travel{order:-2}#eyeh{order:-1}' +
     '#travel.on,#eyeh.on{display:flex}' +
     '#travel>i,#eyeh>i{font-style:normal;font-size:11.5px;color:#b9b1a3;' +
     'font-weight:600;margin-right:3px}' +
@@ -1178,8 +1178,7 @@ function makeJoy() {
     '#travel button,#eyeh button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
     'font:700 12px/1 inherit;padding:0 9px;height:30px;border-radius:15px}' +
     '#travel button.sel,#eyeh button.sel{background:#f2b64c;color:#231702}' +
-    '@media (max-width:560px){#joy{left:12px;bottom:104px;width:100px;height:100px}' +
-    '#travel{left:12px;bottom:52px}#eyeh{left:12px;bottom:12px}' +
+    '@media (max-width:560px){#joy{width:96px;height:96px}' +
     '#travel button,#eyeh button{padding:0 7px;font-size:11px;height:28px}}';
   document.head.appendChild(st);
   syncTravel();
