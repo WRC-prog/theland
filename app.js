@@ -168,7 +168,8 @@ async function loadJSON(p) {
   //
   // terrain.json 은 지도의 뼈대라 옛 것을 물고 있으면 아예 열리지 않는다.
   // 작은 파일이니 app.js 와 같이 늘 새로 받는다.
-  const bust = /terrain\.json$/.test(p) ? '?v=' + Math.floor(Date.now() / 60000) : '';
+  // 큰 사건 자료(1 MB)만 빼고 작은 자료는 늘 새로 받는다.
+  const bust = /events\.json$/.test(p) ? '' : '?v=' + Math.floor(Date.now() / 60000);
   const r = await fetch(p + bust, { cache: 'default' });
   if (!r.ok) throw new Error(p + ' → ' + r.status);
   try {
@@ -209,6 +210,88 @@ async function loadAll() {
   ]);
   BIGRIVERS = unpack(bigrivers); LANES = unpack(lanes);
   JGROUPS = (jgroups && jgroups.groups) || [];
+  // 「전체 여정」은 토막을 이어 붙여 그 자리에서 만든다.
+  // (앱도 joinStops 로 같은 일을 한다 — 자료를 두 벌 들고 있을 까닭이 없다)
+  const WHOLE = [
+    { ko: '출애굽 — 전체', en: 'The Exodus — the whole route', g: '출애굽', take: 0,
+      dko: '라메셋에서 모압 평야와 예리코까지, 사십 년 길 전부',
+      den: 'From Rameses to the plains of Moab and Jericho — all forty years' },
+    { ko: '가나안 정복 — 전체', en: 'The conquest of Canaan — the whole route',
+      g: '가나안 정복', take: 0,
+      dko: '요르단 동편에서 북부 원정까지',
+      den: 'From east of the Jordan to the northern campaign' },
+    { ko: '아브라함과 야곱 — 전체', en: 'Abraham and Jacob — the whole route',
+      g: '족장들의 여정', take: 0,
+      dko: '우르에서 가나안으로, 다시 이집트로',
+      den: 'From Ur to Canaan, and on down to Egypt' },
+    { ko: '사도 바울 — 전 여정', en: 'The apostle Paul — every journey',
+      g: '사도 바울의 여행', take: 4,
+      dko: '1·2·3차 선교 여행과 로마로 가는 항해를 한 줄로',
+      den: 'The first, second and third journeys and the voyage to Rome, in one line' }
+  ];
+  // 예수 그리스도의 발자취. 복음서에 적힌 대로 들른 곳을 차례로 이었다.
+  // (지명은 이미 지도에 있는 것만 쓴다 — 없는 곳을 지어내지 않는다)
+  const JESUS = [
+    { ko: '예수 ① 나심과 어린 시절', en: 'Jesus ① Birth and childhood',
+      dko: '나사렛에서 베들레헴으로, 이집트로 피했다가 다시 나사렛으로',
+      den: 'Nazareth to Bethlehem, into Egypt, and back to Nazareth',
+      stops: ['나사렛', '베들레헴', '예루살렘', '이집트', '나사렛'] },
+    { ko: '예수 ② 침례와 첫 표징', en: 'Jesus ② Baptism and the first sign',
+      dko: '요르단 강으로 내려가 침례를 받고, 광야를 지나 가나로',
+      den: 'Down to the Jordan for baptism, through the wilderness, on to Cana',
+      stops: ['나사렛', '요르단 강', '예리코', '가나', '가버나움'] },
+    { ko: '예수 ③ 갈릴리 봉사', en: 'Jesus ③ The ministry in Galilee',
+      dko: '갈릴리 바다 둘레의 성읍들 — 가버나움을 집처럼 삼았다',
+      den: 'The towns around the Sea of Galilee — Capernaum was his base',
+      stops: ['가버나움', '고라신', '벳새다', '나인', '나사렛', '가나', '가버나움'] },
+    { ko: '예수 ④ 북쪽으로', en: 'Jesus ④ Northward',
+      dko: '시돈 지방과 데카폴리스를 거쳐 높은 산으로',
+      den: 'Through the region of Sidon and the Decapolis to a lofty mountain',
+      stops: ['가버나움', '시돈', '데카폴리스', '헤르몬 산', '가버나움'] },
+    { ko: '예수 ⑤ 사마리아를 지나', en: 'Jesus ⑤ Through Samaria',
+      dko: '유대에서 사마리아를 가로질러 갈릴리로 — 수가의 우물을 지나',
+      den: 'From Judea across Samaria to Galilee, past the well at Sychar',
+      stops: ['예루살렘', '수가', '사마리아', '가버나움'] },
+    { ko: '예수 ⑥ 마지막 유월절 길', en: 'Jesus ⑥ The last Passover journey',
+      dko: '갈릴리에서 예리코를 거쳐 베다니로, 그리고 예루살렘으로',
+      den: 'From Galilee by way of Jericho to Bethany, and on to Jerusalem',
+      stops: ['가버나움', '에브라임', '예리코', '베다니', '벳바게', '예루살렘', '겟세마네'] }
+  ];
+  for (const p of JESUS) {
+    if (PRESETS.some(x => x.ko === p.ko)) continue;
+    const stops = p.stops.filter(n => siteByName.has(n));
+    if (stops.length < 2) continue;
+    PRESETS.push({ ko: p.ko, en: p.en, detailKo: p.dko, detailEn: p.den,
+                   stops: stops, followTerrain: 1 });
+  }
+  {
+    const parts = JESUS.map(p => PRESETS.find(x => x.ko === p.ko)).filter(Boolean);
+    if (parts.length >= 2) {
+      const stops = [];
+      for (const p of parts)
+        for (const st of p.stops) { if (stops[stops.length - 1] === st) continue; stops.push(st); }
+      PRESETS.push({ ko: '예수 — 전 여정', en: 'Jesus — every journey',
+                     detailKo: '나심에서 마지막 유월절까지 한 줄로',
+                     detailEn: 'From his birth to the last Passover, in one line',
+                     stops: stops, followTerrain: 1 });
+    }
+  }
+  JGROUPS.push({ ko: '예수 그리스도의 발자취', en: 'In the footsteps of Jesus Christ',
+                 names: JESUS.map(p => p.ko).concat(['예수 — 전 여정']) });
+
+  for (const w of WHOLE) {
+    if (PRESETS.some(p => p.ko === w.ko)) continue;
+    const g = JGROUPS.find(x => x.ko === w.g);
+    if (!g) continue;
+    let parts = g.names.map(n => PRESETS.find(p => p.ko === n)).filter(Boolean);
+    if (w.take) parts = parts.slice(0, w.take);
+    if (parts.length < 2) continue;
+    const stops = [];
+    for (const p of parts)
+      for (const st of p.stops) { if (stops[stops.length - 1] === st) continue; stops.push(st); }
+    PRESETS.push({ ko: w.ko, en: w.en, detailKo: w.dko, detailEn: w.den,
+                   stops: stops, followTerrain: parts[0].followTerrain });
+  }
   for (const l of LANES) LANEMAP.set(l.a + '\u0000' + l.b, l.via);
   I18N = i18n; TERRAIN = terrain;
   REGIONS = terrain.regions || [];
@@ -990,7 +1073,11 @@ function escapeHTML(s) {
 // 조이스틱으로 걸어 다니고, 걸음새는 걷기 · 낙타 · 전차 가운데 고른다.
 // (실제 걸음보다 빠르게 잡았다. 실측대로 두면 한 골짜기를 건너는 데
 //  반나절이 걸려, 지도를 보러 온 사람에게는 재미가 없다.)
-let fpv = false, fpvBtn = null, eyeM = 12;
+let fpv = false, fpvBtn = null;
+// 눈높이(m). 사람 키에서 산꼭대기까지 — 골짜기를 굽어보려면 높이 서야 한다.
+const EYES = [1.7, 12, 40, 120, 400];
+let eyeIdx = 1, eyeEl = null;
+function eyeM_() { return EYES[eyeIdx]; }
 const TRAVEL = [
   { ko: '걷기', en: 'Walk',    mps: 6  },
   { ko: '낙타', en: 'Camel',   mps: 14 },
@@ -1029,6 +1116,16 @@ function makeJoy() {
   });
   document.body.appendChild(travelEl);
 
+  eyeEl = document.createElement('div');
+  eyeEl.id = 'eyeh';
+  eyeEl.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-ey]');
+    if (!b) return;
+    eyeIdx = +b.dataset.ey;
+    syncTravel(); applyCam();
+  });
+  document.body.appendChild(eyeEl);
+
   let id = null;
   const R = 44;
   const setKnob = (dx, dy) => {
@@ -1066,15 +1163,20 @@ function makeJoy() {
     '#joy i{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;' +
     'border-radius:22px;background:rgba(253,204,97,.92);box-shadow:0 2px 10px rgba(0,0,0,.45);' +
     'pointer-events:none;transition:transform .05s linear}' +
-    '#travel{position:fixed;left:16px;bottom:52px;z-index:27;display:none;gap:2px;' +
-    'padding:3px;border-radius:19px;border:1px solid rgba(255,255,255,.18);' +
-    'background:rgba(20,20,24,.9)}' +
-    '#travel.on{display:flex}' +
-    '#travel button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
-    'font:700 12px/1 inherit;padding:0 10px;height:30px;border-radius:15px}' +
-    '#travel button.sel{background:#f2b64c;color:#231702}' +
-    '@media (max-width:560px){#joy{left:12px;bottom:92px;width:100px;height:100px}' +
-    '#travel{left:12px;bottom:50px}}';
+    '#travel,#eyeh{position:fixed;left:16px;z-index:27;display:none;gap:2px;' +
+    'align-items:center;padding:3px 3px 3px 10px;border-radius:19px;' +
+    'border:1px solid rgba(255,255,255,.18);background:rgba(20,20,24,.9)}' +
+    '#travel{bottom:54px}#eyeh{bottom:14px}' +
+    '#travel.on,#eyeh.on{display:flex}' +
+    '#travel>i,#eyeh>i{font-style:normal;font-size:11.5px;color:#b9b1a3;' +
+    'font-weight:600;margin-right:3px}' +
+    '#eyeh>u{text-decoration:none;font-size:11px;color:#8d867a;margin:0 5px 0 3px}' +
+    '#travel button,#eyeh button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
+    'font:700 12px/1 inherit;padding:0 9px;height:30px;border-radius:15px}' +
+    '#travel button.sel,#eyeh button.sel{background:#f2b64c;color:#231702}' +
+    '@media (max-width:560px){#joy{left:12px;bottom:104px;width:100px;height:100px}' +
+    '#travel{left:12px;bottom:52px}#eyeh{left:12px;bottom:12px}' +
+    '#travel button,#eyeh button{padding:0 7px;font-size:11px;height:28px}}';
   document.head.appendChild(st);
   syncTravel();
 }
@@ -1082,9 +1184,18 @@ function makeJoy() {
 function syncTravel() {
   if (!travelEl) return;
   travelEl.className = fpv ? 'on' : '';
-  travelEl.innerHTML = TRAVEL.map((t, i) =>
+  travelEl.innerHTML = '<i>' + escapeHTML(L.s('걸음', 'Pace')) + '</i>' +
+    TRAVEL.map((t, i) =>
     '<button data-tv="' + i + '"' + (i === travelIdx ? ' class="sel"' : '') + '>' +
     escapeHTML(L.cur === 'ko' ? t.ko : t.en) + '</button>').join('');
+  if (eyeEl) {
+    eyeEl.className = fpv ? 'on' : '';
+    eyeEl.innerHTML = '<i>' + escapeHTML(L.s('눈높이', 'Eye')) + '</i>' +
+      EYES.map((v, i) =>
+      '<button data-ey="' + i + '"' + (i === eyeIdx ? ' class="sel"' : '') + '>' +
+      (v < 10 ? v.toFixed(1) : v) + '</button>').join('') +
+      '<u>m</u>';
+  }
   if (joyEl) joyEl.className = fpv ? 'on' : '';
 }
 
@@ -1113,7 +1224,7 @@ function applyCam() {
   const y = groundAt(cam.tx, cam.tz);
   if (fpv) {
     // 그 자리에 서서 앞을 본다. cam.el 이 고개를 들고 내리는 몫을 한다.
-    const eye = y + eyeM * 0.001 * VEXAG;
+    const eye = y + eyeM_() * 0.001 * VEXAG;
     camera.position.set(cam.tx, eye, cam.tz);
     const pitch = 0.62 - cam.el;                    // 0.62 = 눈높이
     camera.lookAt(cam.tx - Math.sin(cam.az) * 10,
@@ -1200,7 +1311,7 @@ function bindControls() {
   // 화면 위에 얹힌 것들은 지도가 아니다. 여기에 빠뜨리면 그 위에서 누른
   // 손가락을 그림판이 가로채, 단추가 눌리지 않는다.
   const overUI = t => !!(t && t.closest &&
-    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #joy, #travel, #bareBtn'));
+    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #joy, #travel, #eyeh, #bareBtn'));
 
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
   // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
@@ -1256,7 +1367,8 @@ function bindControls() {
     last = { x: e.clientX, y: e.clientY };
     // 따라가는 중에는 **둘러보기**가 된다 — 걸음은 멈추지 않는다
     if (following)        { followAzOff -= dx * 0.005; cam.az -= dx * 0.005; cam.el += dy * 0.005; }
-    else if (lookMode || mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
+    // 시점으로 서 있을 때는 끄는 것이 곧 고개를 돌리는 것이다 — 사방 360도.
+    else if (fpv || lookMode || mode === 'orbit') { cam.az -= dx * 0.005; cam.el += dy * 0.005; }
     else                  { panBy(dx, dy); }
     applyCam();
   });
@@ -3479,7 +3591,7 @@ function makeBareBtn() {
     'color:var(--ink);font:16px/1 inherit;cursor:pointer;' +
     'backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}' +
     'body.bare #top,body.bare #dock,body.bare #panel,body.bare .toast,' +
-    'body.bare #joy,body.bare #travel{display:none}' +
+    'body.bare #joy,body.bare #travel,body.bare #eyeh{display:none}' +
     '@media (max-width:560px){#bareBtn{right:10px;bottom:10px}}';
   document.head.appendChild(st);
 }
