@@ -588,33 +588,6 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         // 손으로 얹던 잔결과 돌빛은 걷어냈다. 실측 자료가 제 결을 가지고
         // 있으니 지어낸 무늬를 덧바를 까닭이 없다.
         vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet);
-
-        // ── 평야의 경작지 패치워크 (샤론 · 이스르엘 · 블레셋 평야, 나일 삼각주…) ──
-        //
-        // 앱과 같은 규칙이다 — 비탈이 완만하고(0.045 미만), 젖어 있고(0.30 넘고),
-        // 해발 1~450 m 인 땅에만. 밭 한 뙈기는 0.85 × 0.6 km, 그 칸마다 주사위를
-        // 굴려 어떤 뙈기는 그루터기빛으로, 어떤 뙈기는 짙은 초록으로 둔다.
-        //
-        // 다만 멀리서 보면 뙈기가 화소보다 작아져 얼룩이 된다 — 예전에 「이게
-        // 현실감이냐」 소리를 들은 그 얼룩이다. 그래서 30 km 밖에서는 스러진다.
-        if (farmOn > 0.5 && hyps < 0.5 && !wet && h > 1.0 && h < 450.0) {
-          float fam = 1.0 - smoothstep(30.0, 95.0, d);
-          if (fam > 0.01) {
-            float dzdx = (hr - hl) / (2.0 * mpp.x);
-            float dzdy = (hd - hu) / (2.0 * mpp.y);
-            if (sqrt(dzdx * dzdx + dzdy * dzdy) < 0.045) {
-              vec2 mu = vec2((lo - moistB.x) / moistB.z, (la - moistB.y) / moistB.w);
-              if (texture2D(moistT, clamp(mu, 0.0, 1.0)).r > 0.30) {
-                float fu = floor(lo * 94.6 / 0.85), fv = floor(la * 111.32 / 0.6);
-                float fh = fract(sin(fu * 127.1 + fv * 311.7) * 43758.5453);
-                if (fh > 0.62)
-                  col = mix(col, vec3(0.72, 0.66, 0.40), clamp((fh - 0.62) * 1.1, 0.0, 1.0) * fam);
-                else if (fh < 0.30)
-                  col = mix(col, vec3(0.30, 0.44, 0.20), clamp((0.30 - fh) * 0.9, 0.0, 1.0) * fam);
-              }
-            }
-          }
-        }
         float lam = clamp(dot(n, sun), 0.0, 1.0);
         float sky = 0.5 + 0.5 * n.y;
         vec3 lit = col * (vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)
@@ -764,6 +737,22 @@ const labelPool = [];
 let shown = [];
 // 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
 const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
+
+// 골라 둔 곳 — 자잘한 마을이라도 **늘** 지도에 뜬다.
+// 찾아 놓고도 지도에 안 보인다는 말이 여기서 나왔다. 앱의 「표시하기」와 같다.
+const MARKED = new Set();
+try {
+  const sv = JSON.parse(localStorage.getItem('theland.marked') || '[]');
+  for (const k of sv) MARKED.add(k);
+} catch (e) {}
+function saveMarked() {
+  try { localStorage.setItem('theland.marked', JSON.stringify([...MARKED])); } catch (e) {}
+}
+function toggleMark(s) {
+  if (!s) return;
+  if (MARKED.has(s.ko)) MARKED.delete(s.ko); else MARKED.add(s.ko);
+  saveMarked(); updateLabels();
+}
 // 지파·민족 이름표에 쓸 그 땅의 색 (이름 → [r,g,b])
 const AREACOLOR = new Map();
 let highlight = null;
@@ -864,6 +853,9 @@ function updateLabels() {
   for (const s of SITES) {
     if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
     if (s.rank >= 10 && cam.dist > 12) continue;         // 성 안의 것은 가까이서만
+    // 골라 둔 곳과 방금 찾은 곳은 어떤 셈에도 걸리지 않는다 — 늘 뜬다.
+    const keep = MARKED.has(s.ko) || highlight === s.ko;
+    if (!keep) {
     // 지파·민족·지역 이름은 넓은 땅의 이름이라 물러섰을 때만 뜬다.
     // 산 · 산맥 · 골짜기 · 물길은 그렇지 않다 — 가까이서도 보여야 한다.
     if ((s.rank === 5 || s.rank === 6 || s.rank === 9) && cam.dist < 60) continue;
@@ -871,16 +863,18 @@ function updateLabels() {
     if (s.rank === 6 && !areaShown('nation', s.ko)) continue;
     const mul = detailMul(s.rank);
     if (mul <= 0) continue;
+    }
     v.set(s.x, s.y, s.z).project(camera);
     if (v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) continue;
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
-    if (d > (cam.dist * 3.2 + 60) * mul) continue;
+    if (!keep && d > (cam.dist * 3.2 + 60) * detailMul(s.rank)) continue;
     // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
     // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
     const era = (s.rank === 5 || s.rank === 6 || s.rank === 9);
-    cand.push({ s, sx: (v.x * .5 + .5) * innerWidth, sy: (-v.y * .5 + .5) * innerHeight, d,
-                score: (era ? -900000 : s.rank * 1000) + d });
+    cand.push({ s, keep: keep, sx: (v.x * .5 + .5) * innerWidth,
+                sy: (-v.y * .5 + .5) * innerHeight, d,
+                score: (keep ? -2000000 : era ? -900000 : s.rank * 1000) + d });
   }
   cand.sort((a, b) => a.score - b.score);
 
@@ -889,9 +883,10 @@ function updateLabels() {
   const taken = new Set();
   const out = [];
   for (const c of cand) {
-    if (out.length >= labelCap()) break;
+    // 골라 둔 곳은 한도에도 자리다툼에도 걸리지 않는다
+    if (!c.keep && out.length >= labelCap()) continue;
     const k = Math.floor(c.sy / cell) * cols + Math.floor(c.sx / cell);
-    if (taken.has(k)) continue;
+    if (!c.keep && taken.has(k)) continue;
     taken.add(k); out.push(c);
   }
 
@@ -913,6 +908,7 @@ function updateLabels() {
     const has = byPlace.has(s.ko);
     const ref = s.rank < 4 && REFUGE.has(s.ko);
     el.className = 'lab r' + s.rank + (ref ? ' refuge' : '') +
+                   (MARKED.has(s.ko) ? ' mark' : '') +
                    (highlight === s.ko ? ' on' : '');
     el.innerHTML = (ref || has ? '<i></i>' : '') + escapeHTML(L.cur === 'ko' ? s.ko : s.en);
     // 지파·민족은 앱처럼 **그 땅 색의 판 위에 큰 흰 글씨**로 앉힌다.
@@ -1012,6 +1008,33 @@ function flyTo(s, dist) {
   applyCam();
 }
 
+// 눌러 두고 있는 자판. tick 이 프레임마다 이만큼씩 흘려 준다.
+const HELD = new Set();
+const KEYMAP = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+                '+', '=', '-', '_', '[', ']', 'q', 'Q', 'e', 'E'];
+let keyT = 0, SHIFT = false;
+function stepKeys() {
+  if (!HELD.size) { keyT = 0; return; }
+  const now = performance.now();
+  const dt = keyT ? Math.min(0.1, (now - keyT) / 1000) : 0.016;
+  keyT = now;
+  const fast = SHIFT ? 2.4 : 1;
+  const px = 900 * dt * fast;                 // 한 초에 화면 900 px 만큼
+  let dx = 0, dz = 0, moved = false;
+  if (HELD.has('ArrowLeft'))  { dx += px; moved = true; }
+  if (HELD.has('ArrowRight')) { dx -= px; moved = true; }
+  if (HELD.has('ArrowUp'))    { dz += px; moved = true; }
+  if (HELD.has('ArrowDown'))  { dz -= px; moved = true; }
+  if (moved) panBy(dx, dz);
+  if (HELD.has('+') || HELD.has('=')) { cam.dist *= Math.exp(-1.6 * dt); moved = true; }
+  if (HELD.has('-') || HELD.has('_')) { cam.dist *= Math.exp( 1.6 * dt); moved = true; }
+  if (HELD.has('[')) { cam.el -= 0.9 * dt; moved = true; }
+  if (HELD.has(']')) { cam.el += 0.9 * dt; moved = true; }
+  if (HELD.has('q') || HELD.has('Q')) { cam.az -= 1.1 * dt; moved = true; }
+  if (HELD.has('e') || HELD.has('E')) { cam.az += 1.1 * dt; moved = true; }
+  if (moved) applyCam();
+}
+
 function bindControls() {
   const el = renderer.domElement;
   const pts = new Map();                 // 지금 눌려 있는 손가락·단추
@@ -1101,13 +1124,32 @@ function bindControls() {
   addEventListener('lostpointercapture', end);
   addEventListener('contextmenu', e => { if (!overUI(e.target)) e.preventDefault(); });
 
-  // 바퀴 — 화살표가 가리키는 곳으로 다가간다
-  // preventDefault 를 꼭 해야 한다. 안 하면 이 창이 아니라 **이 창을 담고 있는
-  // 쪽**(구글 사이트)이 대신 굴러간다.
+  // 바퀴와 트랙패드.
+  //
+  // 마우스 바퀴는 세로로 크고 뚝뚝 끊겨 오고, 트랙패드는 잘게 이어 오며
+  // 가로로도 온다. 그 차이로 갈라서 손버릇에 맞춘다.
+  //   · 두 손가락으로 밀기       → 지도가 따라 움직인다
+  //   · 두 손가락 오므리기(⌃)    → 다가가고 물러선다
+  //   · ⌥ 를 누른 채 두 손가락   → 돌리고 기울인다
+  //   · 마우스 바퀴              → 화살표가 가리키는 곳으로 다가간다
+  // preventDefault 를 꼭 해야 한다. 안 하면 이 창이 아니라 이 창을 담고 있는
+  // 쪽이 대신 굴러간다.
   addEventListener('wheel', e => {
     if (overUI(e.target)) return;
     e.preventDefault();
-    zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY);
+    if (e.ctrlKey) {                       // 오므리기 — 브라우저가 ⌃ 를 붙여 보낸다
+      zoomAt(Math.exp(e.deltaY * 0.012), e.clientX, e.clientY);
+      return;
+    }
+    if (e.altKey) {                        // ⌥ + 두 손가락 — 돌리고 기울이기
+      cam.az -= e.deltaX * 0.006;
+      cam.el += e.deltaY * 0.006;
+      applyCam();
+      return;
+    }
+    const pad = e.deltaMode === 0 && (e.deltaX !== 0 || Math.abs(e.deltaY) < 40);
+    if (pad) { panBy(-e.deltaX * 1.1, -e.deltaY * 1.1); applyCam(); }
+    else zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY);
   }, { passive: false });
 
   // 사파리는 두 손가락 벌리기를 제 나름대로 「쪽 넓히기」로 삼는다 — 막는다
@@ -1118,21 +1160,21 @@ function bindControls() {
   }, { passive: false });
 
   // 자판으로도 — 화살표로 옮기고, +/- 로 다가가고, [ ] 로 기울인다
+  // 자판. 한 번 누를 때마다 뚝뚝 옮기던 것을, **누르고 있는 동안** 부드럽게
+  // 이어 흐르도록 바꿨다. 손을 떼면 곧 멎는다.
+  //   ← → ↑ ↓  옮기기        ⇧ 를 함께 누르면 빠르게
+  //   + −       다가가고 물러서기
+  //   Q E       왼쪽·오른쪽으로 돌기
+  //   [ ]       눕히고 세우기
   addEventListener('keydown', e => {
+    SHIFT = e.shiftKey;
     if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
-    const step = 60;
-    if (e.key === 'ArrowLeft')       panBy(step, 0);
-    else if (e.key === 'ArrowRight') panBy(-step, 0);
-    else if (e.key === 'ArrowUp')    panBy(0, step);
-    else if (e.key === 'ArrowDown')  panBy(0, -step);
-    else if (e.key === '+' || e.key === '=') cam.dist *= 0.8;
-    else if (e.key === '-' || e.key === '_') cam.dist *= 1.25;
-    else if (e.key === '[')          cam.el -= 0.12;
-    else if (e.key === ']')          cam.el += 0.12;
-    else return;
+    if (KEYMAP.indexOf(e.key) < 0) return;
+    HELD.add(e.key);
     e.preventDefault();
-    applyCam();
   });
+  addEventListener('keyup', e => { SHIFT = e.shiftKey; HELD.delete(e.key); });
+  addEventListener('blur', () => HELD.clear());
 }
 
 /** 화면의 한 점을 붙든 채 다가가거나 물러선다 */
@@ -1225,6 +1267,8 @@ function addViewButtons() {
     '#qualPick button{padding:0 7px;font-size:11.5px}}';
   document.head.appendChild(qCSS);
 
+  makeBareBtn();
+
   // 처음은 늘 「하」로 연다. 연결을 넘겨짚어 알림을 띄우던 것은 걷어냈다 —
   // 와이파이인데도 데이터라고 하는 일이 있었다. 화질은 위 단추로 바로 고른다.
 }
@@ -1274,34 +1318,130 @@ function openPlace(s) {
   body.scrollTop = 0;
   panel.classList.add('open');
 }
-onTap(document.getElementById('closeBtn'), () => panel.classList.remove('open'));
+onTap(document.getElementById('closeBtn'), () => {
+  panel.classList.remove('open');
+  panelIsAdmin = false; clearInterval(adminTimer);
+});
 
 // ── 문장에서 곳 찾아내기 ──────────────────────────────────
 //
 // 「브엘세바에서 므깃도로」처럼 한 줄을 통째로 치면, 그 안에 든 지명을
 // **나온 차례대로** 집어낸다. 앱에서 잘 쓰던 것이라 여기에도 둔다.
 // 성구를 붙여 넣어도 그 안의 곳들이 다 잡힌다.
-function scanText(t) {
-  const f = fold(t);
-  if (f.length < 4) return [];
-  const raw = [];
+// 여느 우리말과 똑같이 생긴 이름은 아예 찾지 않는다.
+// 「…이 **아님**」 「**바라**보니」 「-**기나** 하다」 「**웃다**」 가 매번 걸리면
+// 이름표가 쓰레기로 차서 오히려 손이 더 간다. 지도에서 눌러 찾으면 된다.
+const STOPWORDS = new Set(['아님', '바라', '기나', '웃다']);
+
+// 여느 말과 똑같이 생겼지만 버릴 수는 없는 이름.
+// 블레셋의 가자는 다섯 도시 가운데 하나이고, 마리는 유프라테스의 큰 성이며,
+// 아이는 여호수아가 친 성이다. 그래서 막는 대신, 뒤에 **자리를 가리키는 말**이
+// 붙었을 때만 지명으로 본다.
+//   · 「함께 가자」 「가자고」 → 아니다 · 「가자에서」 「가자로」 → 지명
+//   · 「소 두 마리」 → 아니다 · 「마리에서」 → 지명
+//   · 「아이가 울었다」 → 아니다 · 「아이로 올라가」 → 지명
+const NEEDS_PARTICLE = new Set(['가자', '마리', '아이', '아담', '가인', '아인']);
+
+const PLACE_PARTICLES = ['에서부터', '에게서', '에게로', '에서는', '에서도', '으로는', '으로도',
+  '에서', '에게', '으로', '까지', '부터', '에는', '에도', '로는', '로도',
+  '에', '로', '은', '는', '이', '가', '을', '를', '도', '와', '과', '의', '만'];
+const PLACE_FOLLOWERS = [' 사람', ' 성', ' 땅', ' 왕', ' 주민', ' 지역', ' 근처', ' 부근',
+  ' 쪽', ' 및', '성', '왕', '인'];
+// 한 글자 이름은 「돌을 던지다」의 돌처럼 겹치기 쉽다.
+// 어디서·어디까지를 뜻하는 말이 붙었을 때만 지명으로 본다.
+const LOCATIVE = ['에서부터', '에서는', '에서도', '에게서', '에서', '까지', '부터',
+  '으로는', '으로도', '으로', '에는', '에도', '에'];
+// 앞에 수를 세는 말이 오면 지명이 아니다 — 「소 두 마리」 「양 열 마리」
+const COUNTER_HEADS = new Set('0123456789한두세네섯곱덟홉열몇러백천만'.split(''));
+
+function looksLikePlace(t, i, len) {
+  let b = i - 1;
+  if (b >= 0 && t[b] === ' ') b--;
+  if (b >= 0 && COUNTER_HEADS.has(t[b])) return false;
+  const tail = t.slice(i + len);
+  if (!tail) return false;
+  for (const p of PLACE_PARTICLES) if (tail.indexOf(p) === 0) return true;
+  for (const f of PLACE_FOLLOWERS) if (tail.indexOf(f) === 0) return true;
+  return ',·、;'.indexOf(tail[0]) >= 0;
+}
+function oneLetterLooksLikePlace(t, i, len) {
+  const tail = t.slice(i + len);
+  if (!tail) return false;
+  for (const p of LOCATIVE) if (tail.indexOf(p) === 0) return true;
+  return ',·、;'.indexOf(tail[0]) >= 0;
+}
+
+let SCANKEYS = null, SCANSORT = null;
+function buildScanKeys() {
+  if (SCANKEYS) return;
+  SCANKEYS = new Map();
+  const put = (k, s) => {
+    k = (k || '').trim();
+    if (!k || STOPWORDS.has(k)) return;
+    if (!SCANKEYS.has(k)) SCANKEYS.set(k, []);
+    const a = SCANKEYS.get(k);
+    if (!a.some(x => x.ko === s.ko)) a.push(s);
+  };
+  const add = (k, s) => {
+    if (!k) return;
+    put(k, s);
+    const b = k.replace(/[-\s]/g, '');
+    if (b !== k) put(b, s);
+    if (k.indexOf('-') >= 0) put(k.replace(/-/g, ' '), s);
+  };
   for (const s of SITES) {
-    for (const key of [fold(s.ko), fold(s.en)]) {
-      if (!key || key.length < 2) continue;
-      let i = f.indexOf(key);
-      while (i >= 0) { raw.push({ at: i, len: key.length, s }); i = f.indexOf(key, i + 1); }
+    if (s.rank > 4) continue;
+    add(s.ko, s);
+    if (s.en && s.en.length >= 3) add(s.en, s);
+    const l = s.ko.indexOf('('), r = s.ko.lastIndexOf(')');
+    if (l > 0 && r > l) {
+      add(s.ko.slice(0, l), s);
+      for (const p of s.ko.slice(l + 1, r).split(/[;,]/)) add(p, s);
     }
   }
-  // 겹치면 긴 쪽만 남긴다 — 「벧엘」이 있는데 「벧」까지 잡으면 안 된다
-  raw.sort((a, b) => a.at - b.at || b.len - a.len);
+  // 긴 이름부터 본다 — 「벧엘」이 있는데 「벧」까지 잡으면 안 된다
+  SCANSORT = [...SCANKEYS.keys()].sort((a, b) => b.length - a.length);
+}
+
+/** 글에서 지명을 나온 차례대로 집어낸다 (앱의 TextScan 과 같은 규칙) */
+function scanText(t) {
+  if (!t || t.length < 4) return [];
+  buildScanKeys();
+  const lower = t.toLowerCase();
+  const taken = new Array(t.length).fill(false);
+  const raw = [];
+  for (const k of SCANSORT) {
+    const latin = /[a-zA-Z]/.test(k);
+    const hay = latin ? lower : t;
+    const needle = latin ? k.toLowerCase() : k;
+    let from = 0;
+    for (;;) {
+      const i = hay.indexOf(needle, from);
+      if (i < 0) break;
+      from = i + needle.length;
+      let free = true;
+      for (let x = i; x < i + needle.length; x++) if (taken[x]) { free = false; break; }
+      // 로마자는 낱말 경계를 지킨다 — 「Dan」이 「Jordan」 안에서 걸리면 안 된다
+      if (free && latin) {
+        const bch = i > 0 ? hay[i - 1] : ' ';
+        const ach = i + needle.length < hay.length ? hay[i + needle.length] : ' ';
+        if (/[a-z0-9]/.test(bch) || /[a-z0-9]/.test(ach)) free = false;
+      }
+      if (free && NEEDS_PARTICLE.has(k) && !looksLikePlace(t, i, k.length)) free = false;
+      if (free && k.length === 1 && !oneLetterLooksLikePlace(t, i, k.length)) free = false;
+      if (!free) continue;
+      for (let x = i; x < i + needle.length; x++) taken[x] = true;
+      raw.push({ at: i, s: SCANKEYS.get(k)[0] });
+    }
+  }
+  raw.sort((a, b) => a.at - b.at);
   const out = [];
-  let end = -1, seen = new Set();
-  for (const h of raw) {
-    if (h.at < end) continue;
-    end = h.at + h.len;
-    if (seen.has(h.s.ko)) continue;      // 같은 곳이 두 번 나오면 한 번만
-    seen.add(h.s.ko);
-    out.push(h.s);
+  let last = null;
+  for (const r of raw) {
+    // 잇달아 같은 곳이면 한 번만. 한참 뒤에 다시 나오면 그때 또 들른 것이다.
+    if (last === r.s.ko) continue;
+    last = r.s.ko;
+    out.push(r.s);
   }
   return out;
 }
@@ -1349,10 +1489,24 @@ qEl.addEventListener('input', () => {
   }
   window.__scan = found;
   hitsEl.innerHTML = head + out.map((o, i) =>
-    '<div class="hit" data-i="' + o.s.i + '"><b>' + escapeHTML(L.place(o.s.ko)) +
+    '<div class="hit" data-i="' + o.s.i + '">' +
+    '<button class="hmark' + (MARKED.has(o.s.ko) ? ' on' : '') + '" data-mark="' + o.s.i + '">' +
+    escapeHTML(MARKED.has(o.s.ko) ? L.s('표시 끄기', 'Unmark') : L.s('표시', 'Mark')) + '</button>' +
+    '<b>' + escapeHTML(L.place(o.s.ko)) +
     '</b><s>' + escapeHTML(o.sub) + '</s></div>').join('');
 });
 hitsEl.addEventListener('click', e => {
+  // 「표시」 — 골라 둔 곳은 자잘한 마을이라도 늘 지도에 뜬다.
+  // 이때 찾기 칸은 닫지 않는다. 몇 곳을 잇달아 골라 둘 수 있어야 한다.
+  const mk = e.target.closest('[data-mark]');
+  if (mk) {
+    e.stopPropagation();
+    const site = SITES[+mk.dataset.mark];
+    toggleMark(site);
+    mk.className = 'hmark' + (MARKED.has(site.ko) ? ' on' : '');
+    mk.textContent = MARKED.has(site.ko) ? L.s('표시 끄기', 'Unmark') : L.s('표시', 'Mark');
+    return;
+  }
   const row = e.target.closest('.hit'); if (!row) return;
   if (row.dataset.scan) {
     hitsEl.innerHTML = ''; qEl.blur();
@@ -2840,36 +2994,45 @@ async function readCount(k) {
   } catch (e) { return null; }
 }
 
-async function openAdmin() {
-  panelIsRoutes = false;
-  document.getElementById('pTitle').textContent = L.s('들어온 사람', 'Visitors');
-  document.getElementById('pSub').textContent = L.s('세어 둔 값', 'What has been counted');
+let adminTimer = 0;
+async function drawAdmin() {
   const b = document.getElementById('pb');
-  b.innerHTML = '<div class="note">' + escapeHTML(L.s('세는 중…', 'Counting…')) + '</div>';
-  panel.classList.add('open');
-
-  const days = [];
-  for (let i = 0; i < 7; i++) { const d = new Date(); d.setDate(d.getDate() - i); days.push(ymdJS(d)); }
-  const vals = await Promise.all([readCount('people-total'), readCount('visits-total')]
-                                 .concat(days.map(d => readCount('day-' + d))));
-  const n = v => v == null ? '—' : String(v);
-  const row = (k, v) => '<div class="arow"><span>' + escapeHTML(k) + '</span><b>' + n(v) + '</b></div>';
-
-  let h = '<div class="note"><em>' + escapeHTML(L.s('모두', 'All time')) + '</em>' +
-    row(L.s('기기 수 — 대략 사람 수', 'Devices — roughly people'), vals[0]) +
-    row(L.s('들어온 횟수', 'Entries'), vals[1]) + '</div>';
-  h += '<div class="note"><em>' + escapeHTML(L.s('요 이레', 'Last seven days')) + '</em>' +
-    days.map((d, i) => row(d + (i === 0 ? L.s('  (오늘)', '  (today)') : ''), vals[i + 2])).join('') +
-    '</div>';
+  if (!panel.classList.contains('open') || !panelIsAdmin) return;
+  const mk = window.__MKEY || (d => 'm-' + d.getFullYear());
+  const mins = [];
+  for (let i = 1; i <= 10; i++) mins.push(mk(new Date(Date.now() - i * 60000)));
+  const vals = await Promise.all(mins.map(readCount));
+  if (!panel.classList.contains('open') || !panelIsAdmin) return;
+  const now = vals[0];
+  let h = '<div class="note" style="text-align:center;border:0;padding-top:18px">' +
+    '<div class="abig">' + (now == null ? '—' : now) + '</div>' +
+    '<div class="asub">' + escapeHTML(L.s('지금 보고 있는 사람', 'Looking right now')) + '</div></div>';
+  h += '<div class="note"><em>' + escapeHTML(L.s('요 십 분', 'Last ten minutes')) + '</em>' +
+    '<div class="amins">' + vals.slice().reverse().map(v =>
+      '<i>' + (v == null ? '·' : v) + '</i>').join('') + '</div></div>';
   h += '<div class="note" style="color:#8d867a;border:0">' + escapeHTML(L.s(
-    '기기마다 한 번씩 셉니다. 같은 사람이 폰과 컴퓨터로 들어오면 둘로 세고, ' +
-    '브라우저 기록을 지우면 다시 셉니다. 관리 암호로 들어온 것은 세지 않습니다. ' +
-    '누가 들어왔는지는 알 수 없습니다 — 숫자만 셉니다.',
-    'Counted once per device. One person on two devices counts twice; clearing the browser ' +
-    'counts again. Admin entries are not counted. Who came in is not recorded — only how many.'))
+    '열어 둔 창이 한 분에 한 번씩 손을 듭니다. 그래서 이 수는 **지난 한 분** 동안 ' +
+    '열려 있던 창의 수입니다 — 창을 닫으면 다음 분부터 빠집니다. 한 사람이 두 곳에서 ' +
+    '열어 두면 둘로 셉니다. 관리 암호로 들어온 것은 세지 않습니다. 누가 왔는지는 ' +
+    '알 수 없습니다 — 숫자만 셉니다.',
+    'Each open window raises its hand once a minute, so this is how many windows were open ' +
+    'during the last full minute — closing one drops it from the next minute. One person with ' +
+    'two windows counts twice. Admin entries are not counted. Who is looking is not recorded.'))
     + '</div>';
   b.innerHTML = h;
-  b.scrollTop = 0;
+}
+
+let panelIsAdmin = false;
+async function openAdmin() {
+  panelIsRoutes = false; panelIsAdmin = true;
+  document.getElementById('pTitle').textContent = L.s('지금 보는 사람', 'Right now');
+  document.getElementById('pSub').textContent = L.s('열려 있는 창의 수', 'Windows open');
+  document.getElementById('pb').innerHTML =
+    '<div class="note" style="border:0">' + escapeHTML(L.s('세는 중…', 'Counting…')) + '</div>';
+  panel.classList.add('open');
+  await drawAdmin();
+  clearInterval(adminTimer);
+  adminTimer = setInterval(drawAdmin, 20000);   // 스무 초마다 새로
 }
 
 let panelIsRoutes = false;
@@ -2895,6 +3058,20 @@ jgrpCSS.textContent =
   '.arow{display:flex;align-items:baseline;gap:10px;padding:6px 0}' +
   '.arow span{flex:1;color:#cfc8ba;font-size:13px}' +
   '.arow b{font:700 16px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold)}' +
+  '.abig{font:800 64px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold)}' +
+  '.asub{margin-top:6px;color:#cfc8ba;font-size:13px}' +
+  '.amins{display:flex;gap:4px;margin-top:8px}' +
+  '.amins i{flex:1;text-align:center;font:600 12px/28px ui-monospace,Menlo,monospace;' +
+  'color:#cfc8ba;background:rgba(255,255,255,.06);border-radius:7px}' +
+  // 찾은 목록의 「표시」 단추
+  '.hit{position:relative;padding-right:74px}' +
+  '.hmark{position:absolute;right:10px;top:50%;transform:translateY(-50%);' +
+  'border:1px solid rgba(255,255,255,.18);background:none;color:#b9b1a3;' +
+  'font:600 11.5px/1 inherit;padding:0 9px;height:26px;border-radius:13px;cursor:pointer}' +
+  '.hmark.on{background:rgba(253,204,97,.9);color:#231702;border-color:transparent}' +
+  // 표시해 둔 이름표
+  '.lab.mark{color:#ffe6a8}' +
+  '.lab.mark i{background:#ffd36a;box-shadow:0 0 9px rgba(255,211,106,.95)}' +
   // 지파·민족 낱낱이
   '.chips{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 12px 26px}' +
   '.chips .chip{display:inline-flex;align-items:center;gap:5px;cursor:pointer;' +
@@ -3070,6 +3247,35 @@ function toast(text) {
   if (top) el.style.top = (top.getBoundingClientRect().height + 10) + 'px';
   setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 6000);
 }
+// ── 지도만 보기 ────────────────────────────────────────────
+// 단추와 판을 통째로 감춘다. 감추는 단추 하나만 남는다.
+let bareBtn = null, bare = false;
+function makeBareBtn() {
+  bareBtn = document.createElement('button');
+  bareBtn.id = 'bareBtn';
+  onTap(bareBtn, () => {
+    bare = !bare;
+    document.body.classList.toggle('bare', bare);
+    bareBtn.textContent = bare ? '⛶' : '⛶';
+    bareBtn.title = bare ? L.s('단추 다시 보기', 'Show the buttons')
+                         : L.s('지도만 보기', 'Map only');
+    bareBtn.style.background = bare ? 'rgba(253,204,97,.9)' : 'var(--panel)';
+    bareBtn.style.color = bare ? '#231702' : 'var(--ink)';
+  });
+  bareBtn.textContent = '⛶';
+  bareBtn.title = L.s('지도만 보기', 'Map only');
+  document.body.appendChild(bareBtn);
+  const st = document.createElement('style');
+  st.textContent =
+    '#bareBtn{position:fixed;right:12px;bottom:14px;z-index:45;width:38px;height:38px;' +
+    'border-radius:12px;border:1px solid var(--line);background:var(--panel);' +
+    'color:var(--ink);font:16px/1 inherit;cursor:pointer;' +
+    'backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}' +
+    'body.bare #top,body.bare #dock,body.bare #panel,body.bare .toast{display:none}' +
+    '@media (max-width:560px){#bareBtn{right:10px;bottom:10px}}';
+  document.head.appendChild(st);
+}
+
 const toastCSS = document.createElement('style');
 toastCSS.textContent =
   '.toast{position:fixed;left:50%;top:112px;transform:translateX(-50%);z-index:40;' +
@@ -3104,6 +3310,7 @@ document.head.appendChild(routeCSS);
 // ── 돌리기 ────────────────────────────────────────────────
 function tick() {
   requestAnimationFrame(tick);
+  stepKeys();
   if (following) stepFollow();
   renderer.render(scene, camera);
   updateLabels();
@@ -3170,8 +3377,6 @@ function tick() {
         setTimeout(() => {
           buildGrid(region, texR.image, 420, 240);
           placeSites();                 // 가나안 밖 지명도 땅 위로 올라온다
-          // 논밭을 그리려면 어디가 젖었는지 먼저 알아야 한다
-          buildMoist();
           applyCam();
         }, 40);
       }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
