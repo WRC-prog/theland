@@ -1149,14 +1149,22 @@ function zoomAt(f, cx, cy) {
 /** 화면 위 단추 — 마우스가 없는 화면에서도 다가가고 기울일 수 있게 */
 /** 위쪽 단추 — 그림쇠만 두면 눌러 보기 전에는 무엇인지 알 수가 없다.
  *  그림쇠 옆에 **글자**를 붙인다. 좁은 화면에서는 글자가 접힌다. */
+const TOOLBTNS = [];
+/** 말을 바꾸면 툴바 이름도 함께 바뀌게 */
+function syncToolLabels() {
+  for (const t of TOOLBTNS) { t.b.innerHTML = t.label(); t.b.title = t.title(); }
+  syncQualBtn();
+}
+
 function addViewButtons() {
   const tools = document.getElementById('tools');
   const mk = (label, title, fn) => {
     const b = document.createElement('button');
-    b.className = 'btn'; b.title = title;
-    b.innerHTML = label;
+    b.className = 'btn'; b.title = title();
+    b.innerHTML = label();
     onTap(b, fn);
     tools.insertBefore(b, tools.firstChild);
+    TOOLBTNS.push({ b: b, label: label, title: title });
     return b;
   };
   const tag = (icon, word) => '<i>' + icon + '</i><u>' + escapeHTML(word) + '</u>';
@@ -1179,15 +1187,17 @@ function addViewButtons() {
   document.head.appendChild(btnCSS);
   // 넣는 차례가 거꾸로다 (맨 앞에 끼우므로).
   // 확대·각도 단추는 걷어냈다 — 바퀴와 손가락이 이미 하는 일이다.
-  mk(tag('⇢', L.s('길', 'Journeys')), L.s('여정과 경로', 'Journeys and routes'), openRoutes);
-  mk(tag('☰', L.s('표시', 'Display')), L.s('지도에 무엇을 띄울지', 'What the map shows'), openLayers);
-  lookBtn = mk(tag('◎', L.s('둘러보기', 'Look')),
-    L.s('제자리에서 사방을 봅니다', 'Turn in place'), () => {
+  mk(() => tag('⇢', L.s('길', 'Journeys')),
+     () => L.s('여정과 경로', 'Journeys and routes'), openRoutes);
+  mk(() => tag('☰', L.s('표시', 'Display')),
+     () => L.s('지도에 무엇을 띄울지', 'What the map shows'), openLayers);
+  lookBtn = mk(() => tag('◎', L.s('둘러보기', 'Look')),
+    () => L.s('제자리에서 사방을 봅니다', 'Turn in place'), () => {
     lookMode = !lookMode;
     lookBtn.style.background = lookMode ? 'rgba(253,204,97,.25)' : '';
   });
-  const hypsBtn = mk(tag('▲', L.s('표고', 'Relief')),
-    L.s('땅 높이를 색으로 봅니다', 'Colour the land by height'), () => {
+  const hypsBtn = mk(() => tag('▲', L.s('표고', 'Relief')),
+    () => L.s('땅 높이를 색으로 봅니다', 'Colour the land by height'), () => {
     HYPS = !HYPS;
     try { localStorage.setItem('theland.hyps', HYPS ? '1' : '0'); } catch (e) {}
     hypsBtn.style.background = HYPS ? 'rgba(253,204,97,.25)' : '';
@@ -1378,6 +1388,7 @@ function applyLang() {
   document.documentElement.lang = L.cur;
   document.getElementById('homeBtn').innerHTML =
     '<i>⌂</i><u>' + L.s('예루살렘', 'Jerusalem') + '</u>';
+  syncToolLabels();
   document.title = L.s('약속의 땅', 'The Promised Land');
   qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
                         'A place, a person, a word — or a whole line');
@@ -3004,6 +3015,9 @@ function toast(text) {
   el.className = 'toast';
   el.textContent = text;
   document.body.appendChild(el);
+  // 툴바가 폰에서는 두세 줄이 된다. 그 아래로 내려 놓는다.
+  const top = document.getElementById('top');
+  if (top) el.style.top = (top.getBoundingClientRect().height + 10) + 'px';
   setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 6000);
 }
 const toastCSS = document.createElement('style');
