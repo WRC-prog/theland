@@ -554,6 +554,10 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       moistT: { value: moistTex || new THREE.DataTexture(new Uint8Array(1), 1, 1, THREE.LuminanceFormat) },
       moistB: { value: new THREE.Vector4(MOISTB.lon0, MOISTB.lat0, MOISTB.lonSpan, MOISTB.latSpan) },
       farmOn: { value: moistTex ? 1 : 0 },
+      // 땅에 새긴 길 자국 (아래 bakeRoadMask 참고)
+      roadT: { value: roadTex || BLANK1 },
+      roadB: { value: roadBnd || new THREE.Vector4(0, 0, 1, 1) },
+      roadOn: { value: (roadTex && roadShow) ? 1 : 0 },
       // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
       clips: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -1, -1)) },
       nClip: { value: 0 }
@@ -588,6 +592,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       uniform vec4 moistB;
       uniform float farmOn;
       uniform float vexf;
+      uniform sampler2D roadT;
+      uniform vec4 roadB;      // lonMin, latMin, lon폭, lat폭
+      uniform float roadOn;
       uniform vec4 clips[6];
       uniform int nClip;
       uniform vec2 mpp;      // 칸 하나가 덮는 실제 거리 (m) — 동서, 남북
@@ -696,11 +703,35 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         float lo = geo.x + vWorld.x / geo.z;
         float la = geo.y - vWorld.z / geo.w;
         bool wet = wetAt(h, la, lo);
-        float d = length(vWorld - cameraPosition);
+        float d = length(vWorld - cameraPosition);   // 길 자국 굵기에도 쓴다
 
         // 손으로 얹던 잔결과 돌빛은 걷어냈다. 실측 자료가 제 결을 가지고
         // 있으니 지어낸 무늬를 덧바를 까닭이 없다.
         vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet);
+
+        // ── 땅에 새긴 길 ─────────────────────────────────────
+        // 길을 띠로 얹으면 아무리 다듬어도 「위에 붙인 테이프」다. 가까이서는
+        // 땅빛 자체를 다져진 흙빛으로 물들인다 — 그래야 길도 산등성이의
+        // 그늘을 같이 받고 아지랑이도 같이 먹는다. 그늘을 입히기 **전에**
+        // 섞는 까닭이 그것이다.
+        if (roadOn > 0.5 && !wet) {
+          vec2 ru = vec2((lo - roadB.x) / roadB.z,
+                         (roadB.y + roadB.w - la) / roadB.w);
+          if (ru.x > 0.001 && ru.x < 0.999 && ru.y > 0.001 && ru.y < 0.999) {
+            float mk = texture2D(roadT, ru).r;
+            // 다가가면 실제 너비대로 좁게, 물러서면 지도처럼 넓게
+            float t0 = mix(0.72, 0.15, clamp((d - 12.0) / 110.0, 0.0, 1.0));
+            float rd = smoothstep(t0, t0 + 0.22, mk);
+            // 멀리서는 띠가 대신 그린다 — 겹치지 않게 스러진다
+            rd *= 1.0 - smoothstep(70.0, 150.0, d);
+            // 페인트를 칠하는 것이 아니라 **닳은 땅**이다. 그 자리의 땅빛을
+            // 그대로 안고 다져진 흙 쪽으로 조금 기울일 뿐이다. 색을 통째로
+            // 갈아 버리면 산등성이에 우유를 부은 것처럼 된다.
+            vec3 dust = mix(col, vec3(0.64, 0.56, 0.42), 0.55);
+            col = mix(col, dust, rd * 0.80);
+          }
+        }
+
         float lam = clamp(dot(n, sun), 0.0, 1.0);
         float sky = 0.5 + 0.5 * n.y;
         vec3 lit = col * (vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)
@@ -2544,6 +2575,9 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
       push: { value: push == null ? DEPTH_PUSH : push },
       grain: { value: grain ? 1 : 0 },
       len: { value: len || 1 },
+      rGeo: { value: new THREE.Vector4(ORIGIN.lon, ORIGIN.lat, KM_LON, KM_LAT) },
+      rB: { value: roadBnd || new THREE.Vector4(0, 0, 1, 1) },
+      rOn: { value: (grain && roadTex && roadShow) ? 1 : 0 },
       fadeOn: { value: fade ? 1 : 0 },
       tint: { value: new THREE.Color(color) }, alpha: { value: opacity }
     },
@@ -2556,6 +2590,7 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
       'attribute float fadeT;',
       'varying float vEdge;',
       'varying float vFade;',
+      'varying vec3 vW;',
       'float dec(vec3 c){ return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0; }',
       'void main(){',
       '  vec3 p = position;',
@@ -2568,7 +2603,7 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
       '    h = dec(texture2D(hB, clamp(ub, 0.001, 0.999)).rgb);',
       '  } else { h = 0.0; }',
       '  p.y = max(h, floorM) * 0.001 * vex + lift;',
-      '  vEdge = edge; vFade = fadeT;',
+      '  vEdge = edge; vFade = fadeT; vW = p;',
       '  vec4 mv = modelViewMatrix * vec4(p, 1.0);',
       '  mv.xyz *= (1.0 - push);',       // 눈 쪽으로 살짝 — 화면 자리는 그대로
       '  gl_Position = projectionMatrix * mv;',
@@ -2577,8 +2612,10 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
     fragmentShader: [
       'uniform vec3 tint; uniform float alpha; uniform float fadeOn;',
       'uniform float grain; uniform float len;',
+      'uniform vec4 rGeo; uniform vec4 rB; uniform float rOn;',
       'varying float vEdge;',
       'varying float vFade;',
+      'varying vec3 vW;',
       'float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.545); }',
       'float vn(vec2 p){',
       '  vec2 i = floor(p), f = fract(p);',
@@ -2601,8 +2638,16 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
       '    a *= 0.70 + 0.46 * vn(vec2(mod(s * 1.6, 512.0), 0.5));',
       '    // ③ 바퀴와 발이 낸 두 줄기 고랑, 그 사이 가운데는 조금 어둡다',
       '    float rut = 1.0 - smoothstep(0.06, 0.34, abs(e - 0.46));',
-      '    c = mix(c, c * 1.18, rut * 0.6);',
+      '    c = mix(c, c * 1.10, rut * 0.5);',
       '    c = mix(c, c * 0.86, (1.0 - smoothstep(0.0, 0.18, e)) * 0.7);',
+      '  }',
+      '  // 땅에 길을 새겨 둔 자리에서는, 다가갈수록 띠가 스러진다 —',
+      '  // 둘이 겹치면 길이 두 겹으로 보인다.',
+      '  if (rOn > 0.5) {',
+      '    float lo = rGeo.x + vW.x / rGeo.z;',
+      '    float la = rGeo.y - vW.z / rGeo.w;',
+      '    if (lo > rB.x && lo < rB.x + rB.z && la > rB.y && la < rB.y + rB.w)',
+      '      a *= smoothstep(70.0, 150.0, length(vW - cameraPosition));',
       '  }',
       '  // 속은 꽉 차고 테두리만 또렷하게. 예전에는 가장자리로 갈수록',
       '  // 옅게 흩어져 길이 번진 자국처럼 보였다.',
@@ -3285,13 +3330,85 @@ function frameRoute() {
   applyCam(); drawRoute();
 }
 
+// ── 길을 땅에 새긴다 ───────────────────────────────────────
+//
+// 옛길은 포장 도로가 아니라 발과 수레가 다져 놓은 흙바닥이다. 리본으로
+// 얹으면 다가갈수록 「땅 위에 붙인 띠」로 보인다. 그래서 가까이서는
+// 지형 셰이더가 **땅빛 자체를 물들이게** 한다.
+//
+// 길 자국은 이미 받아 둔 자료에서 그때그때 구워 낸다 — 내려받을 파일은
+// 하나도 늘지 않는다. 굵게 → 가늘게 네 번 덧그어 가장자리에 옅은 마루를
+// 남겨 두면, 셰이더가 그 마루를 잘라 「가까이선 좁게, 멀리선 넓게」를 한다.
+let roadTex = null, roadBnd = null, roadShow = false;
+const BLANK1 = new THREE.DataTexture(new Uint8Array([0]), 1, 1, THREE.LuminanceFormat);
+
+function bakeRoadMask(tile) {
+  if (roadTex || !tile || !ROADS.length) return;
+  const kmW = (tile.lonMax - tile.lonMin) * KM_LON;
+  const kmH = (tile.latMax - tile.latMin) * KM_LAT;
+  const W = 2048, H = Math.max(64, Math.round(W * kmH / kmW));
+  const mpp = kmW * 1000 / W;                       // 한 칸이 덮는 실제 거리(m)
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  if (!g) return;
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  const px = lon => (lon - tile.lonMin) / (tile.lonMax - tile.lonMin) * W;
+  const py = lat => (tile.latMax - lat) / (tile.latMax - tile.latMin) * H;
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  g.globalCompositeOperation = 'lighter';
+  for (const [mul, a] of [[7.0, 0.16], [4.2, 0.30], [2.4, 0.52], [1.0, 1.0]]) {
+    g.strokeStyle = 'rgba(255,255,255,' + a + ')';
+    for (const r of ROADS) {
+      if (!r.pts || r.pts.length < 2) continue;
+      const real = r.rank === 0 ? 190 : 120;        // 다져진 길바닥 너비(m)
+      g.lineWidth = Math.max(1.0, real / mpp) * mul;
+      g.beginPath();
+      for (let i = 0; i < r.pts.length; i++) {
+        const x = px(r.pts[i][1]), y = py(r.pts[i][0]);
+        if (i) g.lineTo(x, y); else g.moveTo(x, y);
+      }
+      g.stroke();
+    }
+  }
+  const im = g.getImageData(0, 0, W, H).data;
+  const buf = new Uint8Array(W * H);
+  for (let i = 0, j = 0; i < buf.length; i++, j += 4) buf[i] = im[j];
+  roadTex = new THREE.DataTexture(buf, W, H, THREE.LuminanceFormat);
+  roadTex.minFilter = roadTex.magFilter = THREE.LinearFilter;
+  roadTex.wrapS = roadTex.wrapT = THREE.ClampToEdgeWrapping;
+  roadTex.generateMipmaps = false;
+  roadTex.needsUpdate = true;
+  roadBnd = new THREE.Vector4(tile.lonMin, tile.latMin,
+                              tile.lonMax - tile.lonMin, tile.latMax - tile.latMin);
+  cv.width = cv.height = 1;                          // 큰 그림판은 놓아 준다
+}
+
+/** 땅에 새긴 길을 켜고 끈다 (지형 판이 새로 서면 스스로 따라온다) */
+function syncRoadMask() {
+  for (const m of terrainMats) {
+    if (!m.uniforms.roadT) continue;
+    m.uniforms.roadT.value = roadTex || BLANK1;
+    if (roadBnd) m.uniforms.roadB.value = roadBnd;
+    m.uniforms.roadOn.value = (roadTex && roadShow) ? 1 : 0;
+  }
+  for (const m of drapeMats) {
+    if (!m.uniforms.rOn) continue;
+    if (roadBnd) m.uniforms.rB.value = roadBnd;
+    m.uniforms.rOn.value = (roadTex && roadShow) ? 1 : 0;
+  }
+}
+
 function toggleRoads() {
   if (roadsMesh) {
     scene.remove(roadsMesh);
     roadsMesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
     roadsMesh = null;
+    roadShow = false; syncRoadMask();
     return false;
   }
+  bakeRoadMask(canaanTile);
+  roadShow = true;
   roadsMesh = new THREE.Group();
   for (const r of ROADS) {
     // 땅을 촘촘히 따라가야 능선에서 파먹히지 않는다 (110 m 마디)
@@ -3299,10 +3416,13 @@ function toggleRoads() {
     const wide = Math.max(0.30, cam.dist * 0.0013) * (r.rank === 0 ? 1.6 : 1);
     // 산등성이가 길을 뚫고 올라와 길이 산 밑으로 파고든 것처럼 보였다.
     // 길은 땅 위에 얹는 것이니 덮어 그린다.
-    drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd9c8a4 : 0xc3b190, 0.012,
-              { opacity: r.rank === 0 ? 0.62 : 0.40, order: 5, fade: true, grain: true });
+    // 흙빛에 가깝게, 그리고 옅게. 밝은 살구빛을 0.62 로 얹었더니 산등성이에
+    // 우윳빛 냇물을 부어 놓은 꼴이었다. 길은 땅보다 조금 밝을 뿐이다.
+    drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xa89a76 : 0x968a6e, 0.012,
+              { opacity: r.rank === 0 ? 0.42 : 0.28, order: 5, fade: true, grain: true });
   }
   scene.add(roadsMesh);
+  syncRoadMask();
   return true;
 }
 
