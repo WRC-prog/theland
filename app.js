@@ -2013,8 +2013,8 @@ function applyLang() {
   syncToolLabels();
   syncTravel();
   document.title = L.s('약속의 땅', 'The Promised Land');
-  qEl.placeholder = L.s('지명·인물·낱말, 또는 문장을 통째로',
-                        'A place, a person, a word — or a whole line');
+  qEl.placeholder = L.s('지명 · 인물 · 낱말 또는 문장을 입력하세요',
+                        'Type a place, a person, a word — or a whole line');
   qEl.dispatchEvent(new Event('input'));
   updateHUD(); updateLabels();
   if (panel.classList.contains('open')) {
@@ -3547,8 +3547,17 @@ async function tickLive() {
   if (!liveEl) return;
   const mk = window.__MKEY;
   if (!mk) return;
-  const d = new Date(Date.now() - 60000);
-  const [gen, adm] = await Promise.all([readCount(mk(d)), readCount(mk(d, 'a-'))]);
+  // 지난 칸과 이번 칸을 함께 본다.
+  //   · 지난 칸은 다 채워졌지만 한 마디(1분)가 늦다.
+  //   · 이번 칸은 곧바로 차오르지만 아직 두들기지 않은 창이 빠져 있다.
+  // 큰 쪽이 지금 열려 있는 창 수에 가장 가깝다. 예전에는 지난 칸만 보아서
+  // 방금 들어온 내 창이 한참 뒤에야 나타났다.
+  const now = new Date(), ago = new Date(Date.now() - 60000);
+  const [g0, g1, a0, a1] = await Promise.all([
+    readCount(mk(ago)), readCount(mk(now)),
+    readCount(mk(ago, 'a-')), readCount(mk(now, 'a-'))]);
+  const pick = (x, y) => (x == null && y == null) ? null : Math.max(x || 0, y || 0);
+  const gen = pick(g0, g1), adm = pick(a0, a1);
   liveNum.gen = gen; liveNum.adm = adm;
   const tot = (gen == null && adm == null) ? null : (gen || 0) + (adm || 0);
   liveEl.querySelector('b').textContent = (tot == null ? '—' : tot);
@@ -3567,12 +3576,12 @@ function fillLive() {
                              'this window is counted here')) + '</u></span>' +
       '<b>' + n(a) + '</b></div>' +
     '<div class="lrw"><i class="g"></i><span>' + escapeHTML(L.s('일반', 'Visitors')) +
-      '<u>' + escapeHTML(L.s('보통 암호로 들어온 분들', 'came in with the plain password')) +
+      '<u>' + escapeHTML(L.s('일반 암호로 들어오신 분들', 'came in with the plain password')) +
       '</u></span><b>' + n(g) + '</b></div>' +
     '<div class="lrw tot"><i></i><span>' + escapeHTML(L.s('합계', 'Total')) +
       '</span><b>' + n(tot) + '</b></div>' +
-    '<p>' + escapeHTML(L.s('지난 한 분 동안 열려 있던 창을 셉니다. 창을 닫으면 다음 분에 저절로 빠집니다.',
-                           'Counts windows open in the last minute; a closed one drops off the next minute.')) +
+    '<p>' + escapeHTML(L.s('최근 1분 사이에 열려 있던 창의 수입니다. 창을 닫으면 1분쯤 뒤에 저절로 빠집니다.',
+                           'Windows open within the last minute; a closed one drops off about a minute later.')) +
     '</p>';
 }
 
