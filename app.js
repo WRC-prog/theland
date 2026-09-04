@@ -1488,6 +1488,7 @@ function setFpv(on) {
     cam.el = 0.9;
   }
   if (fpvBtn) fpvBtn.style.background = fpv ? 'rgba(253,204,97,.25)' : '';
+  stopFly();
   syncTravel();
   applyCam();
 }
@@ -1530,6 +1531,7 @@ function groundAt(x, z) { return groundY(latOfZ(z), lonOfX(x)); }
 
 /** 화면에서 끈 만큼 땅이 따라오게 — 눈금은 거리와 기울기에서 나온다 */
 function panBy(dx, dy, dist) {
+  stopFly();                                  // 사람이 끌면 날아가던 것은 그만둔다
   const d = dist || cam.dist;
   const k = 2 * d * Math.tan(camera.fov * Math.PI / 360) / Math.max(innerHeight, 1);
   const kz = k / Math.max(Math.sin(cam.el), 0.22);   // 낮게 볼수록 위아래로 더 멀다
@@ -1538,15 +1540,59 @@ function panBy(dx, dy, dist) {
   cam.tz += dx * k * sa - dy * kz * ca;
 }
 
-/** 그 곳으로 옮겨 간다.
+/** 그 곳으로 **날아간다.**
+ *
+ *  예전에는 이름을 누르면 화면이 그 자리로 툭 갈아 끼워졌다. 어디에서
+ *  어디로 옮겨 갔는지 알 수가 없어, 누를 때마다 땅을 잃어버렸다.
+ *  앱처럼 날아간다 — 가는 동안 살짝 물러났다가 목표로 내려앉는다.
  *
  *  **높이는 건드리지 않는다.** 예전에는 누를 때마다 26~90 km 로 확 당겨서,
  *  멀리서 내려다보다가 이름 하나 눌렀을 뿐인데 화면이 통째로 뒤집혔다.
- *  보는 높이는 보는 사람이 정한다. (dist 를 딱 집어 준 때만 따른다) */
+ *  보는 높이는 보는 사람이 정한다 — 날아간 뒤에도 떠날 때의 높이 그대로다.
+ *  (dist 를 딱 집어 준 때만 따른다) */
+let flyAnim = null, flyT = 0;
+
 function flyTo(s, dist) {
-  cam.tx = s.x; cam.tz = s.z;
-  if (dist) cam.dist = dist;
   highlight = s.ko;
+  const d1 = dist || cam.dist;
+  const km = Math.hypot(s.x - cam.tx, s.z - cam.tz);
+  // 시점으로 걷는 중이거나 코앞이면 그냥 옮긴다.
+  // 짧은 거리에 애니메이션을 걸면 굼떠 보이기만 한다.
+  if (fpv || (km < 0.8 && Math.abs(d1 - cam.dist) < 0.8)) {
+    stopFly();
+    cam.tx = s.x; cam.tz = s.z; cam.dist = d1;
+    applyCam();
+    return;
+  }
+  const base = Math.max(cam.dist, d1);
+  flyAnim = {
+    t: 0,
+    // 멀수록 오래 — 앱과 같은 잣대 (0.9초 + 220 km 마다 1초, 최대 2.6초)
+    dur: Math.min(900 + km * 4.5, 2600),
+    x0: cam.tx, z0: cam.tz, x1: s.x, z1: s.z,
+    d0: cam.dist, d1: d1,
+    // 가는 동안만 살짝 물러난다. 짧은 걸음이면 거의 물러나지 않는다.
+    lift: Math.min(0.85, km / Math.max(base * 4, 1))
+  };
+  flyT = 0;
+}
+
+function stopFly() { flyAnim = null; flyT = 0; }
+
+/** 한 판 만큼 날아간다 */
+function stepFly(dt) {
+  const f = flyAnim;
+  if (!f) return;
+  f.t += dt;
+  const u = Math.max(0, Math.min(1, f.t / f.dur));
+  const e = u * u * (3 - 2 * u);                       // 가다가 부드럽게 선다
+  cam.tx = f.x0 + (f.x1 - f.x0) * e;
+  cam.tz = f.z0 + (f.z1 - f.z0) * e;
+  cam.dist = (f.d0 + (f.d1 - f.d0) * e) * (1 + Math.sin(u * Math.PI) * f.lift);
+  if (u >= 1) {
+    cam.tx = f.x1; cam.tz = f.z1; cam.dist = f.d1;
+    stopFly();
+  }
   applyCam();
 }
 
@@ -1574,7 +1620,7 @@ function stepKeys() {
   if (HELD.has(']')) { cam.el += 0.9 * dt; moved = true; }
   if (HELD.has('q') || HELD.has('Q')) { cam.az -= 1.1 * dt; moved = true; }
   if (HELD.has('e') || HELD.has('E')) { cam.az += 1.1 * dt; moved = true; }
-  if (moved) applyCam();
+  if (moved) { stopFly(); applyCam(); }
 }
 
 function bindControls() {
@@ -1598,6 +1644,7 @@ function bindControls() {
 
   addEventListener('pointerdown', e => {
     if (overUI(e.target)) return;
+    stopFly();                                // 손을 대면 날아가던 것은 그만둔다
     moved = 0;
     try { el.setPointerCapture(e.pointerId); } catch (_) {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1723,6 +1770,7 @@ function bindControls() {
 
 /** 화면의 한 점을 붙든 채 다가가거나 물러선다 */
 function zoomAt(f, cx, cy) {
+  stopFly();
   const before = cam.dist;
   cam.dist = Math.max(3.0, Math.min(4200, cam.dist * f));
   const moved = 1 - cam.dist / before;
@@ -2193,7 +2241,7 @@ document.getElementById('homeBtn').innerHTML =
   '<i>' + svgIco(ICO.home) + '</i><u class="big">예루살렘</u>';
 onTap(document.getElementById('homeBtn'), () => {
   const s = siteByName.get('예루살렘');
-  if (s) flyTo(s, 260); else { cam.tx = 0; cam.tz = 0; cam.dist = 260; applyCam(); }
+  if (s) flyTo(s, 260); else { stopFly(); cam.tx = 0; cam.tz = 0; cam.dist = 260; applyCam(); }
 });
 function applyLang() {
   document.getElementById('langBtn').innerHTML =
@@ -3422,6 +3470,7 @@ function toggleFollow() {
 
 function stepFollow() {
   if (!following || !routePts) return;
+  stopFly();
   const now = performance.now();
   const dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
@@ -3494,6 +3543,7 @@ function setRoute(stops) {
 }
 
 function frameRoute() {
+  stopFly();
   if (!routePts || !routePts.length) return;
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (const p of routePts) {
@@ -4437,6 +4487,7 @@ function tick() {
   requestAnimationFrame(tick);
   syncDrapeDepth();
   stepKeys();
+  if (flyAnim) { const n = performance.now(); stepFly(flyT ? Math.min(120, n - flyT) : 16); flyT = n; }
   if (fpv) { const n = performance.now(); stepFpv(fpvT ? Math.min(120, n - fpvT) : 16); fpvT = n; }
   else fpvT = 0;
   if (following) stepFollow();
