@@ -119,8 +119,26 @@ async function setQual(q) {
       if (mt.uniforms.hB) mt.uniforms.hB.value = hTexB || hTexA;
     }
     dropDetail();
+    // 높이 격자를 **모두** 다시 세운다.
+    //
+    // 예전에는 가나안 것만 다시 세우고 넓은 세계와 지역 판은 버려 두었다.
+    // 그러면 화질을 한 번 바꾼 뒤로 가나안 밖의 땅 높이가 죄다 0 이 되어,
+    // 「여기는 물이니 물낯을 바닥으로 삼아라」는 판단이 뒤집혔다.
+    // 그래서 바다를 건너는 뱃길이 물낯이 아니라 **바닷속 지형**을 따라
+    // 그려졌다 — 로마로 가는 항해가 지중해 밑바닥을 기어갔다.
     GRIDS.length = 0;
     buildGrid(ca, texC.image, 1500, 1700);
+    if (worldMesh && hTexB && hTexB.image) buildGrid(re, hTexB.image, 420, 240);
+    for (const [file, m] of regionLoaded) {
+      if (!m || m === 'loading') continue;
+      const t = REGIONS.find(x => x.file === file);
+      const tx = m.material && m.material.uniforms && m.material.uniforms.hmap.value;
+      if (!t || !tx || !tx.image) continue;
+      const sx = t.seg || 800;
+      const sz = Math.max(80, Math.round(sx * (t.latMax - t.latMin) * KM_LAT
+                                            / ((t.lonMax - t.lonMin) * KM_LON)));
+      buildGrid(t, tx.image, Math.min(sx, 520), Math.min(sz, 520));
+    }
     placeSites();
     applyCam();
     toast(L.s('화질 ' + QUAL_NAME()[q], 'Detail: ' + QUAL_NAME()[q]));
