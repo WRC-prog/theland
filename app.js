@@ -3516,19 +3516,62 @@ async function readCount(k) {
 
 // 지금 몇 창이 열려 있는가 — 툴바에 켜 두는 등 하나.
 // 판을 열어 표를 보는 것이 아니라, 사람 모양 옆에 수가 적히고 주황 불이 깜빡인다.
-let liveEl = null, liveTimer = 0;
+//
+// 등을 누르면 **관리자 몇 · 일반 몇**으로 갈라서 보여 준다. 수 하나만 적혀
+// 있으면 그것이 나 자신인지 남인지 알 길이 없어, 세어 놓고도 쓸 데가 없었다.
+// 그래서 관리용 암호로 들어온 창은 따로 「a-」 칸을 두들기게 했다.
+let liveEl = null, liveTimer = 0, livePop = null;
+const liveNum = { adm: null, gen: null };
 async function tickLive() {
   if (!liveEl) return;
   const mk = window.__MKEY;
   if (!mk) return;
-  const v = await readCount(mk(new Date(Date.now() - 60000)));
-  liveEl.querySelector('b').textContent = (v == null ? '—' : v);
+  const d = new Date(Date.now() - 60000);
+  const [gen, adm] = await Promise.all([readCount(mk(d)), readCount(mk(d, 'a-'))]);
+  liveNum.gen = gen; liveNum.adm = adm;
+  const tot = (gen == null && adm == null) ? null : (gen || 0) + (adm || 0);
+  liveEl.querySelector('b').textContent = (tot == null ? '—' : tot);
+  if (livePop && livePop.classList.contains('on')) fillLive();
+}
+
+function fillLive() {
+  if (!livePop) return;
+  const n = v => (v == null ? '—' : String(v));
+  const g = liveNum.gen, a = liveNum.adm;
+  const tot = (g == null && a == null) ? null : (g || 0) + (a || 0);
+  livePop.innerHTML =
+    '<h4>' + escapeHTML(L.s('지금 열려 있는 창', 'Open right now')) + '</h4>' +
+    '<div class="lrw"><i class="a"></i><span>' + escapeHTML(L.s('관리자', 'Admin')) +
+      '<u>' + escapeHTML(L.s('보고 계신 이 창도 여기 들어 있습니다',
+                             'this window is counted here')) + '</u></span>' +
+      '<b>' + n(a) + '</b></div>' +
+    '<div class="lrw"><i class="g"></i><span>' + escapeHTML(L.s('일반', 'Visitors')) +
+      '<u>' + escapeHTML(L.s('보통 암호로 들어온 분들', 'came in with the plain password')) +
+      '</u></span><b>' + n(g) + '</b></div>' +
+    '<div class="lrw tot"><i></i><span>' + escapeHTML(L.s('합계', 'Total')) +
+      '</span><b>' + n(tot) + '</b></div>' +
+    '<p>' + escapeHTML(L.s('지난 한 분 동안 열려 있던 창을 셉니다. 창을 닫으면 다음 분에 저절로 빠집니다.',
+                           'Counts windows open in the last minute; a closed one drops off the next minute.')) +
+    '</p>';
+}
+
+function toggleLive() {
+  if (!livePop) return;
+  const on = !livePop.classList.contains('on');
+  livePop.classList.toggle('on', on);
+  if (!on) return;
+  fillLive();
+  const r = liveEl.getBoundingClientRect();
+  livePop.style.top = Math.round(r.bottom + 8) + 'px';
+  livePop.style.left = Math.round(Math.max(8, Math.min(innerWidth - 258, r.left))) + 'px';
+  tickLive();
 }
 function makeLive() {
   liveEl = document.createElement('div');
   liveEl.id = 'live';
   liveEl.className = 'card';
-  liveEl.title = L.s('지금 열려 있는 창', 'Windows open right now');
+  liveEl.title = L.s('지금 열려 있는 창 — 눌러서 갈라 보기',
+                     'Windows open right now — tap for the breakdown');
   liveEl.innerHTML =
     '<i class="dot"></i>' +
     '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
@@ -3536,10 +3579,42 @@ function makeLive() {
     '</svg><b>·</b>';
   const tools = document.getElementById('tools');
   tools.parentNode.insertBefore(liveEl, tools);
+
+  livePop = document.createElement('div');
+  livePop.id = 'livePop';
+  livePop.className = 'card';
+  document.body.appendChild(livePop);
+  onTap(liveEl, () => toggleLive());
+  // 바깥을 누르면 닫는다 (등과 팝업 자신은 빼고)
+  document.addEventListener('pointerdown', ev => {
+    if (!livePop.classList.contains('on')) return;
+    if (ev.target.closest && ev.target.closest('#live, #livePop')) return;
+    livePop.classList.remove('on');
+  });
+
   const st = document.createElement('style');
   st.textContent =
     '#live{display:inline-flex;align-items:center;gap:7px;padding:0 13px;height:38px;' +
-    'border-radius:12px;color:var(--ink);white-space:nowrap}' +
+    'border-radius:12px;color:var(--ink);white-space:nowrap;cursor:pointer;' +
+    '-webkit-tap-highlight-color:transparent}' +
+    '#live:hover{border-color:rgba(255,255,255,.22)}' +
+    '#livePop{position:fixed;z-index:40;width:250px;padding:12px 14px 10px;display:none;' +
+    'box-shadow:0 12px 34px rgba(0,0,0,.5)}' +
+    '#livePop.on{display:block}' +
+    '#livePop h4{margin:0 0 8px;font:600 12.5px/1 inherit;color:var(--dim);letter-spacing:.02em}' +
+    '#livePop .lrw{display:flex;align-items:center;gap:9px;padding:8px 0}' +
+    '#livePop .lrw+.lrw{border-top:1px solid rgba(255,255,255,.07)}' +
+    '#livePop .lrw i{width:9px;height:9px;border-radius:5px;flex:0 0 auto}' +
+    '#livePop .lrw i.a{background:#fdcc61;box-shadow:0 0 8px rgba(253,204,97,.65)}' +
+    '#livePop .lrw i.g{background:#7fc8a9}' +
+    '#livePop .lrw span{flex:1;font-size:13px;color:var(--ink);line-height:1.25}' +
+    '#livePop .lrw u{display:block;text-decoration:none;font-size:10.5px;' +
+    'color:#8d867a;margin-top:3px;line-height:1.4}' +
+    '#livePop .lrw b{font:700 17px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold)}' +
+    '#livePop .tot{border-top:1px solid rgba(255,255,255,.16)}' +
+    '#livePop .tot span{color:var(--dim);font-size:12px}' +
+    '#livePop .tot b{color:var(--ink);font-size:15px}' +
+    '#livePop p{margin:9px 0 0;font-size:10.8px;line-height:1.55;color:#8d867a}' +
     '#live svg{width:13px;height:13px;opacity:.85}' +
     '#live b{font:700 15px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold);' +
     'min-width:1ch;text-align:center}' +
