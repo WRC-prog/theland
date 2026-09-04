@@ -878,9 +878,20 @@ function updateRegions() {
 let baseCanaan = null, canaanTex = null, canaanTile = null;
 let detailMesh = null, detailWin = null;
 
+// 조각 판이 맡은 자리를 큰 판이 비우되, **딱 맞춰 비우지 않는다.**
+//
+// 딱 맞추면 그 선에서 두 면의 높이가 미세하게 어긋난다 — 조각 판은 60 m
+// 마디로, 큰 판은 475 m 마디로 같은 그림을 읽으니 능선 하나를 서로 다르게
+// 깎는다. 그 틈으로 하늘이 비쳐, 걸을 때 앞에 파란 실 조각이 흩어져
+// 따라다녔다. 지역 판끼리 쓰는 것과 같은 수를 쓴다 — 큰 판이 조각 밑으로
+// 조금 들어가게 비울 네모를 안쪽으로 줄인다.
+const DETAIL_LAP = 0.7;                 // 700 m 겹침
 function setBaseClip(r) {
   if (!baseCanaan) return;
-  setClips(baseCanaan, r ? [new THREE.Vector4(r.x, r.z, r.x + r.w, r.z + r.d)] : []);
+  const m = DETAIL_LAP;
+  setClips(baseCanaan, r
+    ? [new THREE.Vector4(r.x + m, r.z + m, r.x + r.w - m, r.z + r.d - m)]
+    : []);
 }
 
 function dropDetail() {
@@ -918,6 +929,10 @@ function updateDetail() {
 
   if (detailMesh) { scene.remove(detailMesh); detailMesh.geometry.dispose(); detailMesh.material.dispose(); }
   detailMesh = makeTerrain(t, segX, segZ, canaanTex, null, { x, z, w, d });
+  // 겹치는 띠에서는 **조각 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
+  // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
+  detailMesh.material.polygonOffsetFactor = -26;
+  detailMesh.material.polygonOffsetUnits = -5;
   detailMesh.renderOrder = 1;
   scene.add(detailMesh);
   detailWin = { cx: cam.tx, cz: cam.tz, dist: cam.dist, x, z, w, d };
