@@ -1521,8 +1521,9 @@ function updateLabels() {
     el.addEventListener('pointerdown', ev => {
       labDown = { x: ev.clientX, y: ev.clientY };
     });
+    // stopPropagation 을 하지 않는다. pointerup 을 여기서 막으면 지도가
+    // 손가락을 놓지 못해(pts 가 남아) 다음 끌기가 어긋난다.
     onTap(el, ev => {
-      ev.stopPropagation();
       if (labSlid(ev)) return;               // 누른 게 아니라 문지른 것이다
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
@@ -1963,7 +1964,11 @@ function bindControls() {
   // click 은 이름표가 아니라 그림판에서 일어난다 — 이름표의 손잡이는
   // 영영 부르지 못한다. 손가락(터치)은 제 나름의 규칙이 있어 멀쩡했으니
   // 아이패드에서는 되고 맥에서만 안 되었던 것이다.
-  // 이름표는 지도가 아니라 **단추**다. 여기서 아예 손을 떼게 한다.
+  //
+  // 그렇다고 이름표에서 손을 아주 떼면 안 된다. 이름표 위에 손가락을
+  // 얹고 밀었을 때 지도가 따라오지 않기 때문이다. **끌기는 그대로 두고
+  // 가로채기만 건너뛴다.** 누른 것인지 문지른 것인지는 이름표가 제
+  // 누름 자리로 따로 가린다(labSlid).
   const overLab = t => !!(t && t.closest && t.closest('.lab, .rmark'));
 
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
@@ -1972,10 +1977,10 @@ function bindControls() {
     || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
 
   addEventListener('pointerdown', e => {
-    if (overUI(e.target) || overLab(e.target)) return;
+    if (overUI(e.target)) return;
     stopFly();                                // 손을 대면 날아가던 것은 그만둔다
     moved = 0; downAt = { x: e.clientX, y: e.clientY };
-    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+    if (!overLab(e.target)) { try { el.setPointerCapture(e.pointerId); } catch (_) {} }
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) {
       mode = orbitish(e) ? 'orbit' : 'pan';
@@ -3734,7 +3739,6 @@ function updateStopMarks() {
       labDown = { x: ev.clientX, y: ev.clientY };
     });
     onTap(el, ev => {
-      ev.stopPropagation();
       if (labSlid(ev)) return;
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
@@ -4738,10 +4742,10 @@ onTap(document.getElementById('pb'), ev => {
 
 const labSizeCSS = document.createElement('style');
 labSizeCSS.textContent =
-  // 손가락으로 짚을 자리를 넓힌다. 글자만큼만 잡히면 열 번에 서너 번은
-  // 빗나간다 — 글씨는 그대로 두고 둘레의 빈 자리만 넓혀 준다.
+  // 브라우저가 이름표 위의 손가락을 「스크롤일지도 모른다」며 붙잡고
+  // 있지 않게 한다. (짚을 자리는 넓히지 않는다 — 글자 둘레가 벌어지면
+  // 이름표끼리 서로 밀어내 지도가 성겨 보인다)
   '.lab{touch-action:manipulation}' +
-  '@media (pointer:coarse){.lab{padding:8px 11px}.rmark{padding:10px 15px 10px 8px}}' +
   // 상 — 큰 도시
   '.lab.r0{font-size:19px;font-weight:800;letter-spacing:.01em}' +
   '.lab.r1{font-size:15.5px;font-weight:700}' +
