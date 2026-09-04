@@ -617,8 +617,11 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         if (la > 31.05 && la < 33.75 && lo > 34.20 && lo < 36.30) dry = lo > coastLon(la) + 0.06;
         if (la > 29.62 && la <= 31.05 && lo > 34.95 && lo < 35.80) dry = true;   // 아라바 골짜기
         if (la > 28.30 && la < 30.60 && lo > 25.80 && lo < 29.60) dry = true;   // 카타라 저지
-        // 지구대 안에도 진짜 물은 있다 — 사해(수면 -430 m)와 갈릴리 바다(-210 m)
-        if (la > 31.00 && la < 31.79 && lo > 35.32 && lo < 35.62 && h < -415.0) dry = false;
+        // 지구대 안에도 진짜 물은 있다 — 사해와 갈릴리 바다.
+        // 높이 자료에는 사해의 **물낯이 -412 m 짜리 판판한 면**으로 담겨 있다.
+        // 그런데 -415 보다 낮아야 물로 치게 해 두어서, 그 면이 걸리지 않고
+        // 소금 바다가 통째로 마른 땅으로 칠해졌다. 물낯 높이(-393 m)에 맞춘다.
+        if (la > 31.00 && la < 31.79 && lo > 35.32 && lo < 35.62 && h < -391.0) dry = false;
         if (la > 32.68 && la < 32.92 && lo > 35.47 && lo < 35.68 && h < -195.0) dry = false;
         return !dry;
       }
@@ -2488,7 +2491,7 @@ const DEPTH_PUSH = 0.02;
 // 지금 걷고 있는 길은 조금 더 세게 — 이것만은 늘 보여야 한다.
 const ROUTE_PUSH = 0.035;
 
-function drapeMaterial(color, opacity, lift, through, fade, push) {
+function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
   const mt = new THREE.ShaderMaterial({
     transparent: true, depthTest: through !== true, depthWrite: false,
     side: THREE.DoubleSide, polygonOffset: true,
@@ -2499,6 +2502,8 @@ function drapeMaterial(color, opacity, lift, through, fade, push) {
       hasB: { value: hTexB ? 1 : 0 },
       vex: { value: VEXAG }, lift: { value: lift },
       push: { value: push == null ? DEPTH_PUSH : push },
+      grain: { value: grain ? 1 : 0 },
+      len: { value: len || 1 },
       fadeOn: { value: fade ? 1 : 0 },
       tint: { value: new THREE.Color(color) }, alpha: { value: opacity }
     },
@@ -2531,15 +2536,40 @@ function drapeMaterial(color, opacity, lift, through, fade, push) {
     ].join('\n'),
     fragmentShader: [
       'uniform vec3 tint; uniform float alpha; uniform float fadeOn;',
+      'uniform float grain; uniform float len;',
       'varying float vEdge;',
       'varying float vFade;',
+      'float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.545); }',
+      'float vn(vec2 p){',
+      '  vec2 i = floor(p), f = fract(p);',
+      '  f = f * f * (3.0 - 2.0 * f);',
+      '  return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x),',
+      '             mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);',
+      '}',
       'void main(){',
+      '  float e = abs(vEdge);',
+      '  float a = alpha;',
+      '  vec3 c = tint;',
+      '  if (grain > 0.5) {',
+      '    // 흙길 — 자로 자른 띠가 아니라 발과 수레가 다져 놓은 자국이다.',
+      '    float s = vFade * len;                    // 첫머리에서 몇 km 왔는가',
+      '    float side = step(0.0, vEdge);            // 왼쪽 길섶과 오른쪽 길섶은 따로 논다',
+      '    // ① 길섶이 들쭉날쭉하게 — 폭이 조금씩 늘고 준다',
+      '    float w = 0.76 + 0.36 * vn(vec2(mod(s * 4.5, 512.0), mix(1.7, 7.3, side)));',
+      '    e = e / w;',
+      '    // ② 다져진 정도도 고르지 않다 — 진했다 옅었다 한다',
+      '    a *= 0.70 + 0.46 * vn(vec2(mod(s * 1.6, 512.0), 0.5));',
+      '    // ③ 바퀴와 발이 낸 두 줄기 고랑, 그 사이 가운데는 조금 어둡다',
+      '    float rut = 1.0 - smoothstep(0.06, 0.34, abs(e - 0.46));',
+      '    c = mix(c, c * 1.18, rut * 0.6);',
+      '    c = mix(c, c * 0.86, (1.0 - smoothstep(0.0, 0.18, e)) * 0.7);',
+      '  }',
       '  // 속은 꽉 차고 테두리만 또렷하게. 예전에는 가장자리로 갈수록',
       '  // 옅게 흩어져 길이 번진 자국처럼 보였다.',
-      '  float a = alpha * (1.0 - smoothstep(0.76, 1.0, vEdge));',
+      '  a *= (1.0 - smoothstep(0.76, 1.0, e));',
       '  // 첫머리와 끝머리는 스러지게 — 길이 허공에서 뚝 끊기지 않도록',
       '  if (fadeOn > 0.5) a *= smoothstep(0.0, 0.045, vFade) * (1.0 - smoothstep(0.955, 1.0, vFade));',
-      '  vec3 c = mix(tint, tint * 0.5, smoothstep(0.42, 0.88, vEdge));',
+      '  c = mix(c, c * 0.5, smoothstep(0.42, 0.88, e));',
       '  if (a < 0.01) discard;',
       '  gl_FragColor = vec4(c, a);',
       '}'
@@ -2578,7 +2608,7 @@ function drapeLine(pts, widthKm, color, lift, opt) {
     const nx = -dz / len * widthKm / 2, nz = dx / len * widthKm / 2;
     const x = worldX(p.lon), z = worldZ(p.lat);
     const fl = floorMeters(p.lat, p.lon), ft = arc[i] / total;
-    pos.push(x + nx, 0, z + nz);  edge.push(1); flr.push(fl); fdt.push(ft);
+    pos.push(x + nx, 0, z + nz);  edge.push(-1); flr.push(fl); fdt.push(ft);
     pos.push(x, 0, z);            edge.push(0); flr.push(fl); fdt.push(ft);
     pos.push(x - nx, 0, z - nz);  edge.push(1); flr.push(fl); fdt.push(ft);
     if (i < n - 1) {
@@ -2593,7 +2623,7 @@ function drapeLine(pts, widthKm, color, lift, opt) {
   g.setAttribute('fadeT', new THREE.Float32BufferAttribute(fdt, 1));
   g.setIndex(idx);
   const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift,
-                            opt.through, opt.fade, opt.push);
+                            opt.through, opt.fade, opt.push, opt.grain, total);
   drapeMats.push(mat);
   const m = new THREE.Mesh(g, mat);
   m.renderOrder = opt.order || 5;
@@ -3230,7 +3260,7 @@ function toggleRoads() {
     // 산등성이가 길을 뚫고 올라와 길이 산 밑으로 파고든 것처럼 보였다.
     // 길은 땅 위에 얹는 것이니 덮어 그린다.
     drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd9c8a4 : 0xc3b190, 0.012,
-              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 5, fade: true });
+              { opacity: r.rank === 0 ? 0.62 : 0.40, order: 5, fade: true, grain: true });
   }
   scene.add(roadsMesh);
   return true;
@@ -3300,6 +3330,29 @@ function earClip(pts) {
   return out;
 }
 
+/** 물의 낯 — 땅보다 눈 쪽으로 살짝 밀어 그린다.
+ *
+ *  지형은 판과 판의 이음매를 이기려고 폴리곤 옵셋을 세게 당겨 놓았다(-20).
+ *  수면은 그냥 놓여 있으니 늘 그 밑으로 깔렸다 — 소금 바다가 통째로
+ *  사라진 것이 그래서였다. 길·강에 쓰던 것과 같은 수를 쓴다. */
+function waterMaterial(color, opacity) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { tint: { value: new THREE.Color(color) },
+                alpha: { value: opacity }, push: { value: 0.03 } },
+    vertexShader: [
+      'uniform float push;',
+      'void main(){',
+      '  vec4 mv = modelViewMatrix * vec4(position, 1.0);',
+      '  mv.xyz *= (1.0 - push);',
+      '  gl_Position = projectionMatrix * mv;',
+      '}'].join('\n'),
+    fragmentShader: [
+      'uniform vec3 tint; uniform float alpha;',
+      'void main(){ gl_FragColor = vec4(tint, alpha); }'].join('\n')
+  });
+}
+
 function addLakes() {
   for (const l of LAKES) {
     const tri = earClip(l.ring);
@@ -3310,8 +3363,7 @@ function addLakes() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
     g.setIndex(idx);
-    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-      color: 0x1d4e6b, transparent: true, opacity: 0.93, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(g, waterMaterial(0x1d4e6b, 0.93));
     m.renderOrder = 2;
     m.frustumCulled = false;
     scene.add(m);
