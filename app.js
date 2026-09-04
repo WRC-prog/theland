@@ -845,6 +845,12 @@ function updateDetail() {
 // ── 이름표 ────────────────────────────────────────────────
 const labelPool = [];
 let shown = [];
+// 지난 판에 떠 있던 이름들. 화면을 조금 움직였다고 이름이 사라졌다
+// 나타났다 하면 눈이 어지럽다. 한 번 뜬 이름은 웬만하면 그대로 둔다.
+const LABPREV = new Set();
+// 이름 하나가 늘 같은 DOM 조각을 쓰게 한다. 자리 번호로 나눠 주면
+// 차례가 한 칸만 밀려도 글씨가 통째로 갈아 끼워져 튀어 보인다.
+const LABSLOT = new Map();
 // 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
 const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
 
@@ -873,14 +879,17 @@ function labelCap() { return innerWidth < 560 ? 52 : 130; }
 /** 시점으로 서 있을 때, 이 곳이 산에 가려 안 보이는가.
  *  눈에서 그 곳까지 곧게 가면서 땅이 그 선보다 높이 솟는 데가 있으면 가려진 것이다.
  *  (하늘에서 내려다볼 때는 재지 않는다 — 그때는 다 보이는 것이 맞다) */
-function hiddenByLand(s, camPos) {
+function hiddenByLand(s, camPos, was) {
   const steps = 14;
+  // 이미 떠 있던 이름은 조금 넉넉히 봐 준다 — 능선을 스칠 때마다
+  // 껐다 켰다 하면 그것이 곧 깜빡임이다.
+  const tol = was ? 0.06 : 0.015;
   for (let i = 2; i < steps; i++) {
     const t = i / steps;
     const x = camPos.x + (s.x - camPos.x) * t;
     const z = camPos.z + (s.z - camPos.z) * t;
     const y = camPos.y + (s.y - camPos.y) * t;
-    if (groundAt(x, z) > y + 0.015) return true;
+    if (groundAt(x, z) > y + tol) return true;
   }
   return false;
 }
@@ -1000,15 +1009,18 @@ function updateLabels() {
     v.set(s.x, s.y, s.z).project(camera);
     if (v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) continue;
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
-    if (!keep && d > (cam.dist * 3.2 + 60) * detailMul(s.rank)) continue;
-    if (fpv && !s.era && hiddenByLand(s, camPos)) continue;
+    // 떠 있던 이름에게는 좀 더 먼 데까지 자리를 준다 (되돌아올 때는 좁게)
+    const was = LABPREV.has(s.ko);
+    if (!keep && d > (cam.dist * 3.2 + 60) * detailMul(s.rank) * (was ? 1.22 : 1)) continue;
+    if (fpv && !s.era && hiddenByLand(s, camPos, was)) continue;
     // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
     // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
     const era = !!s.era || s.rank === 9;
     cand.push({ s, keep: keep, sx: (v.x * .5 + .5) * innerWidth,
                 sy: (-v.y * .5 + .5) * innerHeight, d,
-                score: (keep ? -2000000 : era ? -900000 : s.rank * 1000) + d });
+                score: (keep ? -2000000 : era ? -900000 : s.rank * 1000) + d
+                       - (was ? 520 : 0) });
   }
   cand.sort((a, b) => a.score - b.score);
 
@@ -1034,13 +1046,36 @@ function updateLabels() {
     });
     labelRoot.appendChild(el); labelPool.push(el);
   }
-  for (let i = 0; i < labelPool.length; i++) {
-    const el = labelPool[i];
-    if (i >= out.length) { el.style.display = 'none'; continue; }
+  // 이름마다 지난 판에 쓰던 조각을 그대로 물려 준다
+  const used = new Array(labelPool.length).fill(false);
+  const slot = new Array(out.length).fill(-1);
+  for (let i = 0; i < out.length; i++) {
+    const j = LABSLOT.get(out[i].s.ko);
+    if (j != null && j < labelPool.length && !used[j]) { used[j] = true; slot[i] = j; }
+  }
+  for (let i = 0, free = 0; i < out.length; i++) {
+    if (slot[i] >= 0) continue;
+    while (free < labelPool.length && used[free]) free++;
+    used[free] = true; slot[i] = free;
+  }
+  LABSLOT.clear(); LABPREV.clear();
+  for (let i = 0; i < out.length; i++) {
+    LABSLOT.set(out[i].s.ko, slot[i]);
+    LABPREV.add(out[i].s.ko);
+  }
+  for (let j = 0; j < labelPool.length; j++) if (!used[j]) labelPool[j].style.display = 'none';
+  for (let i = 0; i < out.length; i++) {
+    const el = labelPool[slot[i]];
     const c = out[i], s = c.s;
     el._site = s;
     const has = byPlace.has(s.ko);
     const ref = s.rank < 4 && REFUGE.has(s.ko);
+    // 글씨와 차림새가 그대로면 손대지 않는다. 판마다 다시 써 넣으면
+    // 브라우저가 그때마다 글자를 다시 앉혀 미세하게 떨린다.
+    const sig = s.ko + '|' + s.rank + '|' + (ref ? 1 : 0) + '|' + (has ? 1 : 0) + '|' +
+                (MARKED.has(s.ko) ? 1 : 0) + '|' + (highlight === s.ko ? 1 : 0) + '|' + L.cur;
+    if (el._sig !== sig) {
+    el._sig = sig;
     el.className = 'lab r' + s.rank + (ref ? ' refuge' : '') +
                    (MARKED.has(s.ko) ? ' mark' : '') +
                    (highlight === s.ko ? ' on' : '');
@@ -1054,6 +1089,7 @@ function updateLabels() {
       el.style.borderColor = p(1.35, 0.95);
     } else if (el.style.background) {
       el.style.background = ''; el.style.borderColor = '';
+    }
     }
     el.style.display = '';
     el.style.left = c.sx + 'px';
@@ -1102,9 +1138,11 @@ function escapeHTML(s) {
 // (실제 걸음보다 빠르게 잡았다. 실측대로 두면 한 골짜기를 건너는 데
 //  반나절이 걸려, 지도를 보러 온 사람에게는 재미가 없다.)
 let fpv = false, fpvBtn = null;
-// 눈높이(m). 사람 키에서 산꼭대기까지 — 골짜기를 굽어보려면 높이 서야 한다.
-const EYES = [1.7, 12, 40, 120, 400];
-let eyeIdx = 1, eyeEl = null;
+// 눈높이(m). 처음에는 380 m — 언덕 하나쯤 위에서 골짜기를 굽어보는 높이다.
+// 사람 키에 붙여 두었더니 앞산에 다 가려 아무것도 안 보였다. 거기서부터
+// 위로 더 올라가는 자리를 넉넉히 두어, 지방 전체를 굽어볼 수도 있게 했다.
+const EYES = [1.7, 40, 120, 380, 900, 2000, 4500];
+let eyeIdx = 3, eyeEl = null;
 function eyeM_() { return EYES[eyeIdx]; }
 const TRAVEL = [
   { ko: '걷기', en: 'Walk',    mps: 6  },
@@ -1269,7 +1307,7 @@ function applyCam() {
   camera.lookAt(cam.tx, y, cam.tz);
   // 길은 세계 눈금으로 그리므로 멀어지면 실오라기가 되고 다가가면 밭두렁이 된다.
   // 배쯤 달라졌을 때만 다시 굽는다 — 끌 때마다 다시 만들 일은 아니다.
-  if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.5) drawRoute();
+  if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.3) drawRoute();
   syncFog();
   updateDetail();
   updateRegions();
@@ -2416,7 +2454,20 @@ function tileBounds(t) {
   return new THREE.Vector4(x0, z0, worldX(t.lonMax) - x0, worldZ(t.latMin) - z0);
 }
 
-function drapeMaterial(color, opacity, lift, through, fade) {
+// 땅에 붙는 것을 눈 쪽으로 얼마나 밀어 줄 것인가 (거리의 몇 곱).
+//
+// 예전에는 길과 강의 깊이 견주기를 아예 꺼 두었다. 그러면 하늘에서 볼 때는
+// 능선에 안 먹히니 좋았지만, 낮게 내려서면 **산 너머의 강이 앞산을 뚫고**
+// 비쳐 보였다 — 「지형이 투명하다」는 말이 여기서 나왔다.
+// 그래서 견주기는 켜 두되, 눈 쪽으로 거리의 2 % 만큼 밀어 놓는다.
+//   · 제 발밑의 땅과는 2 % 차이로 이기니 능선에 먹히지 않는다.
+//   · 앞을 가로막은 산은 그보다 훨씬 가까우니 여전히 가려 준다.
+// 화면 위 자리는 조금도 움직이지 않는다 — 시선을 따라 밀 뿐이다.
+const DEPTH_PUSH = 0.02;
+// 지금 걷고 있는 길은 조금 더 세게 — 이것만은 늘 보여야 한다.
+const ROUTE_PUSH = 0.035;
+
+function drapeMaterial(color, opacity, lift, through, fade, push) {
   const mt = new THREE.ShaderMaterial({
     transparent: true, depthTest: through !== true, depthWrite: false,
     side: THREE.DoubleSide, polygonOffset: true,
@@ -2426,13 +2477,14 @@ function drapeMaterial(color, opacity, lift, through, fade) {
       hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
       hasB: { value: hTexB ? 1 : 0 },
       vex: { value: VEXAG }, lift: { value: lift },
+      push: { value: push == null ? DEPTH_PUSH : push },
       fadeOn: { value: fade ? 1 : 0 },
       tint: { value: new THREE.Color(color) }, alpha: { value: opacity }
     },
     vertexShader: [
       'uniform sampler2D hA; uniform vec4 bA;',
       'uniform sampler2D hB; uniform vec4 bB;',
-      'uniform float hasB, vex, lift;',
+      'uniform float hasB, vex, lift, push;',
       'attribute float edge;',
       'attribute float floorM;',
       'attribute float fadeT;',
@@ -2451,7 +2503,9 @@ function drapeMaterial(color, opacity, lift, through, fade) {
       '  } else { h = 0.0; }',
       '  p.y = max(h, floorM) * 0.001 * vex + lift;',
       '  vEdge = edge; vFade = fadeT;',
-      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
+      '  vec4 mv = modelViewMatrix * vec4(p, 1.0);',
+      '  mv.xyz *= (1.0 - push);',       // 눈 쪽으로 살짝 — 화면 자리는 그대로
+      '  gl_Position = projectionMatrix * mv;',
       '}'
     ].join('\n'),
     fragmentShader: [
@@ -2517,7 +2571,8 @@ function drapeLine(pts, widthKm, color, lift, opt) {
   g.setAttribute('floorM', new THREE.Float32BufferAttribute(flr, 1));
   g.setAttribute('fadeT', new THREE.Float32BufferAttribute(fdt, 1));
   g.setIndex(idx);
-  const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift, opt.through, opt.fade);
+  const mat = drapeMaterial(color, opt.opacity != null ? opt.opacity : 0.8, lift,
+                            opt.through, opt.fade, opt.push);
   drapeMats.push(mat);
   const m = new THREE.Mesh(g, mat);
   m.renderOrder = opt.order || 5;
@@ -2604,19 +2659,25 @@ function chevronTexture() {
 }
 
 function chevronMaterial(lift, period) {
-  return new THREE.ShaderMaterial({
-    transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+  // 예전에는 여기서 깊이 견주기를 껐는데, syncDrapeDepth 가 through 표시가
+  // 없는 재질을 모두 「견주는 것」으로 되돌려 놓았다. 그래서 어두운 테두리만
+  // 산을 덮고 그 위의 갈매기표는 산에 잘려 나가, 길이 갈가리 찢겨 보였다.
+  // 이제 테두리와 갈매기표가 **같은 규칙**을 쓴다.
+  const mt = new THREE.ShaderMaterial({
+    transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -12,
     uniforms: {
       hA: { value: hTexA }, bA: { value: hBoundA || new THREE.Vector4(0,0,1,1) },
       hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
       hasB: { value: hTexB ? 1 : 0 },
       vex: { value: VEXAG }, lift: { value: lift },
+      push: { value: ROUTE_PUSH },
       map: { value: chevronTexture() }, period: { value: period }
     },
     vertexShader: [
       'uniform sampler2D hA; uniform vec4 bA;',
       'uniform sampler2D hB; uniform vec4 bB;',
-      'uniform float hasB, vex, lift, period;',
+      'uniform float hasB, vex, lift, period, push;',
       'attribute vec2 uv2;',
       'attribute float floorM;',
       'varying vec2 vT;',
@@ -2633,7 +2694,9 @@ function chevronMaterial(lift, period) {
       '  } else { h = 0.0; }',
       '  p.y = max(h, floorM) * 0.001 * vex + lift;',
       '  vT = vec2(uv2.x / period, uv2.y);',
-      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
+      '  vec4 mv = modelViewMatrix * vec4(p, 1.0);',
+      '  mv.xyz *= (1.0 - push);',
+      '  gl_Position = projectionMatrix * mv;',
       '}'
     ].join('\n'),
     fragmentShader: [
@@ -2646,6 +2709,8 @@ function chevronMaterial(lift, period) {
       '}'
     ].join('\n')
   });
+  mt.userData.through = false;
+  return mt;
 }
 
 /** 갈매기표 띠 하나 */
@@ -2728,7 +2793,7 @@ function drapeArea(ring, color, opacity) {
   g.setIndex(idx);
   // 땅빛을 **덮는** 색이다. 깊이를 견주면 산등성이가 색을 뚫고 올라와
   // 지파·민족 땅이 산 밑으로 깔린 것처럼 보인다. 견주지 않고 덮는다.
-  const mat = drapeMaterial(color, opacity, 0.006, true, false);
+  const mat = drapeMaterial(color, opacity, 0.006, true, false, 0.05);
   drapeMats.push(mat);
   const m = new THREE.Mesh(g, mat);
   m.renderOrder = 2;
@@ -3089,10 +3154,12 @@ function drawRoute() {
   // 굵은 형광펜 한 줄이 아니라 **길잡이 화살표**로 — 어느 쪽으로 가는지가
   // 먼저 보여야 한다. 가느다란 실선 위에 화살표를 촘촘히 박는다.
   // 앱과 같은 모양 — 어두운 테두리 위에 갈매기표 띠
-  const w = Math.max(0.5, cam.dist * 0.0055);
+  // 멀리 물러설수록 굵게 잡되 한도를 둔다. 예전에는 한도가 없어서, 멀리서
+  // 그려 둔 띠를 그대로 안고 내려오면 골짜기를 통째로 덮는 담요가 되었다.
+  const w = Math.max(0.35, Math.min(5.5, cam.dist * 0.0055));
   routeMesh = new THREE.Group();
   routeMesh.add(drapeLine(routePts, w * 1.5, 0x2a1b08, 0.018,
-                          { through: true, opacity: 0.72, order: 6 }));
+                          { opacity: 0.72, order: 6, push: ROUTE_PUSH }));
   routeMesh.add(chevronRibbon(routePts, w, 0.022));
   scene.add(routeMesh);
 }
@@ -3142,7 +3209,7 @@ function toggleRoads() {
     // 산등성이가 길을 뚫고 올라와 길이 산 밑으로 파고든 것처럼 보였다.
     // 길은 땅 위에 얹는 것이니 덮어 그린다.
     drapeRuns(roadsMesh, pts, wide, r.rank === 0 ? 0xd9c8a4 : 0xc3b190, 0.012,
-              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 5, fade: true, through: true });
+              { opacity: r.rank === 0 ? 0.55 : 0.34, order: 5, fade: true });
   }
   scene.add(roadsMesh);
   return true;
@@ -3246,7 +3313,7 @@ function addRivers() {
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
     drapeRuns(riverMesh, pts, Math.max(wide, dry ? 0.45 : 0.55),
               dry ? 0x4d87a6 : 0x2f6f95, 0.010,
-              { opacity: dry ? 0.55 : 0.8, order: 4, fade: true, through: true });
+              { opacity: dry ? 0.55 : 0.8, order: 4, fade: true });
   }
   // 가나안 바깥의 큰 강 — 나일·유프라테스·티그리스·오론테스·할리스…
   // 광역 지형은 화소가 커서 강바닥이 담기지 않는다. 그래서 애굽도
@@ -3258,9 +3325,9 @@ function addRivers() {
     const wide = Math.max(0.8, Math.min(4.0, (r.channelM || 200) / 420));
     // 광역 판은 꼭짓점이 몇 km 씩 떨어져 있어, 골짜기를 가로지르는 면이
     // 실제 강바닥보다 높이 걸린다. 그대로 두면 다가갈수록 강이 땅에
-    // 파묻혀 사라졌다 — 이 물줄기만은 땅에 가리지 않게 둔다.
+    // 파묻혀 사라졌다 — 그래서 이 물줄기만은 좀 더 세게 밀어 준다.
     drapeRuns(riverMesh, pts, wide, 0x2f6f95, 0.014,
-              { opacity: 0.86, order: 4, through: true, fade: true });
+              { opacity: 0.86, order: 4, fade: true, push: 0.045 });
   }
   scene.add(riverMesh);
 }
