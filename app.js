@@ -40,6 +40,33 @@ const L = {
 };
 let BOOKS_BY_LEN = [];
 
+// ── 표기 바로잡기 ─────────────────────────────────────────
+//
+// 사건 자료에 옛 표기가 몇 군데 남아 있었다. 자료를 다시 뽑을 때까지
+// 여기서 갈아 끼운다 — 라이브러리 본문의 표기를 그대로 따른다.
+//   · 벨릭스 → 펠릭스 · 더베 → 데르베 · 무라 → 미라 · 멜리데 → 몰타
+//   · 나훔 3:9 의 구스 → 에티오피아 (민수기 12:1 의 구스는 그대로다)
+//   · 성경 이름은 띄어 쓴다 — 고린도 전서 · 요한 1서 …
+const WORDFIX = [
+  ['벨릭스', '펠릭스'],
+  ['더베 사람', '데르베 사람'],
+  ['무라에서', '미라에서'],
+  ['멜리데', '몰타'],
+  ['구스와 이집트', '에티오피아와 이집트'],
+  ['바울로을', '바울로를'],
+  ['고린도전서', '고린도 전서'], ['고린도후서', '고린도 후서'],
+  ['데살로니가전서', '데살로니가 전서'], ['데살로니가후서', '데살로니가 후서'],
+  ['디모데전서', '디모데 전서'], ['디모데후서', '디모데 후서'],
+  ['베드로전서', '베드로 전서'], ['베드로후서', '베드로 후서'],
+  ['요한1서', '요한 1서'], ['요한2서', '요한 2서'], ['요한3서', '요한 3서']
+];
+function fixWords(s) {
+  if (typeof s !== 'string' || !s) return s;
+  for (let i = 0; i < WORDFIX.length; i++)
+    if (s.indexOf(WORDFIX[i][0]) >= 0) s = s.split(WORDFIX[i][0]).join(WORDFIX[i][1]);
+  return s;
+}
+
 /** 찾기용으로 다듬은 꼴 — 붙임표·가운뎃점·띄어쓰기를 지우고 소문자로 */
 function fold(s) {
   let o = '';
@@ -326,6 +353,8 @@ async function loadAll() {
   ]) if (!WAYS.some(x => x.ko === w.ko)) WAYS.push(w);
   AREAS = areas || { tribes: [], nations: [] };
   I18N = i18n;
+  // 성경 이름도 같은 표기로 — 여기서 갈아 끼워야 영문 이름 표도 맞물린다
+  { const nb = {}; for (const k in i18n.book) nb[fixWords(k)] = i18n.book[k]; i18n.book = nb; }
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
 
   SITES = unpack(sites);
@@ -335,11 +364,12 @@ async function loadAll() {
   EVENTS = unpack(events);
   for (const e of EVENTS) {
     e.eraKo = ERAS[e.era]; e.kindKo = KINDS[e.kind];
+    e.title = fixWords(e.title); e.text = fixWords(e.text); e.ref = fixWords(e.ref);
     e.f = fold(e.title + ' ' + e.ref + ' ' + e.text + ' ' + e.titleEn + ' ' + e.textEn);
     if (!byPlace.has(e.place)) byPlace.set(e.place, []);
     byPlace.get(e.place).push(e);
   }
-  for (const n of unpack(notes)) NOTES.set(n.place, n);
+  for (const n of unpack(notes)) { n.ko = fixWords(n.ko); NOTES.set(n.place, n); }
   // 물길에도 이름을 붙인다 — 앱처럼 골짜기와 급류가 지도에 보이게.
   // 가운데 점을 자리로 삼아 지명 목록에 끼워 넣는다(등급 7 = 물길).
   for (const wv of WAYS) {
@@ -1450,7 +1480,7 @@ let joyEl = null, joyKnob = null, travelEl = null;
 function stepFpv(dt) {
   if (!fpv) return;
   if (!joyVec.x && !joyVec.y) return;
-  const step = TRAVEL[travelIdx].mps * SPEEDS[speedIdx] * dt / 1000;   // 미터/초 → km
+  const step = TRAVEL[travelIdx].mps * spdMul() * dt / 1000;   // 미터/초 → km
   const sa = Math.sin(cam.az), ca = Math.cos(cam.az);
   // 앞은 시선 쪽, 옆은 그 오른쪽
   const f = -joyVec.y * step, r = joyVec.x * step;
@@ -1852,9 +1882,29 @@ function bindControls() {
     else zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY);
   }, { passive: false });
 
-  // 사파리는 두 손가락 벌리기를 제 나름대로 「쪽 넓히기」로 삼는다 — 막는다
-  for (const n of ['gesturestart', 'gesturechange', 'gestureend'])
-    addEventListener(n, e => e.preventDefault(), { passive: false });
+  // 맥북 트랙패드로 오므리고 벌리기.
+  //
+  // 크롬과 파이어폭스는 이것을 ⌃ 를 붙인 wheel 로 보내 주는데, **사파리는
+  // 제스처로만 보낸다.** 그런데 여기서는 「쪽 넓히기」를 막으려고 그 셋을
+  // 통째로 삼키고 있었다 — 그래서 맥에서는 확대·축소가 아예 먹지 않았다.
+  // 막되, 그 값으로 다가가고 물러선다.
+  let gsc = 0;
+  addEventListener('gesturestart', e => {
+    if (overUI(e.target)) return;
+    e.preventDefault();
+    gsc = e.scale || 1;
+  }, { passive: false });
+  addEventListener('gesturechange', e => {
+    if (overUI(e.target)) return;
+    e.preventDefault();
+    const sc = e.scale || 1;
+    if (gsc > 0.01 && sc > 0.01) zoomAt(gsc / sc, e.clientX, e.clientY);
+    gsc = sc;
+  }, { passive: false });
+  addEventListener('gestureend', e => {
+    gsc = 0;
+    if (!overUI(e.target)) e.preventDefault();
+  }, { passive: false });
   addEventListener('touchmove', e => {
     if (!overUI(e.target) && e.cancelable) e.preventDefault();
   }, { passive: false });
@@ -3285,8 +3335,26 @@ function syncAreas(force) {
 }
 
 // ── 따라가는 자리 표식과 걸음 빠르기 ────────────────────────
-let runnerEl = null, speedIdx = 1;
-const SPEEDS = [0.5, 1, 2, 4];
+let runnerEl = null;
+
+// 빠르기는 **가로 게이지**로 잡는다.
+//
+// 예전에는 ×0.5 ~ ×4 네 칸뿐이었다. 긴 길에서는 네 칸을 다 올려도 굼떴고,
+// 시점으로 걸을 때는 땅 하나를 건너는 데 하루가 걸렸다. 손잡이 하나로
+// 잇달아 고르게 한다 — 맨 왼쪽 ×0.75, 맨 오른쪽 ×200.
+// 눈금은 **곱셈으로** 늘어나므로 왼쪽은 촘촘하고 오른쪽은 성큼성큼 뛴다.
+// 처음 자리는 게이지의 5 % — 예전의 ×1 과 같은 빠르기다.
+const SPD_MIN = 0.75, SPD_MAX = 200;
+let spdP = 0.05;
+try {
+  const v = parseFloat(localStorage.getItem('theland.spd'));
+  if (v >= 0 && v <= 1) spdP = v;
+} catch (e) {}
+function spdMul() { return SPD_MIN * Math.pow(SPD_MAX / SPD_MIN, spdP); }
+function spdLabel() {
+  const m = spdMul();
+  return '\u00d7' + (m < 10 ? m.toFixed(1) : Math.round(m));
+}
 
 function syncRunner() {
   if (!runnerEl) {
@@ -3301,17 +3369,22 @@ function syncRunner() {
       'rgba(255,210,122,0) 64%);box-shadow:0 0 14px rgba(255,200,90,.8)}' +
       '#runner.on{display:block;animation:rpulse 1.4s ease-in-out infinite}' +
       '@keyframes rpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.28)}}' +
-      '#spdBtn{display:none;align-items:center;gap:2px;padding:3px 4px 3px 11px;' +
+      '#spdBtn{display:none;align-items:center;gap:11px;padding:7px 15px;' +
       'border:1px solid rgba(255,255,255,.18);border-radius:21px;' +
       'background:rgba(20,20,24,.9)}' +
       '#spdBtn.on{display:flex}' +
-      '#spdBtn>i{font-style:normal;font-size:12px;color:#b9b1a3;font-weight:600;' +
-      'margin-right:4px}' +
-      '#spdBtn button{border:0;background:none;color:#b9b1a3;cursor:pointer;' +
-      'font:700 12.5px/1 inherit;padding:0 10px;height:32px;border-radius:16px}' +
-      '#spdBtn button.sel{background:#f2b64c;color:#231702}' +
-      '@media (max-width:560px){#spdBtn{padding:3px 3px 3px 9px}' +
-      '#spdBtn button{padding:0 8px;font-size:11.5px;height:30px}}';
+      '#spdBtn>i{font-style:normal;font-size:12px;color:#b9b1a3;font-weight:600}' +
+      '#spdBtn>u{text-decoration:none;font:700 12.5px/1 ui-monospace,monospace;' +
+      'color:#f2b64c;min-width:48px;text-align:right}' +
+      '#spdBtn input{-webkit-appearance:none;appearance:none;width:190px;height:4px;' +
+      'margin:0;border-radius:2px;outline:none;cursor:pointer;' +
+      'background:linear-gradient(90deg,#f2b64c,rgba(255,255,255,.24))}' +
+      '#spdBtn input::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;' +
+      'border-radius:10px;background:#f2b64c;box-shadow:0 1px 5px rgba(0,0,0,.5)}' +
+      '#spdBtn input::-moz-range-thumb{width:20px;height:20px;border:0;border-radius:10px;' +
+      'background:#f2b64c;box-shadow:0 1px 5px rgba(0,0,0,.5)}' +
+      '@media (max-width:560px){#spdBtn{padding:6px 12px;gap:9px}' +
+      '#spdBtn input{width:132px}}';
     document.head.appendChild(st);
   }
   if (!following || !routePts) { runnerEl.className = ''; return; }
@@ -3326,29 +3399,32 @@ function syncRunner() {
 
 // 빠르기는 **바로 고르는** 것이다. 예전에는 한 번 누를 때마다 다음 칸으로
 // 넘어가서, 가운데에서 처음으로 돌아가려면 끝까지 한 바퀴를 돌아야 했다.
-let spdBtn = null;
+let spdBtn = null, spdRange = null, spdOut = null;
 function syncSpeedBtn() {
   if (!spdBtn) {
     spdBtn = document.createElement('div');
     spdBtn.id = 'spdBtn';
-    onTap(spdBtn, ev => {
-      const b = ev.target.closest('[data-sp]');
-      if (!b) return;
-      speedIdx = +b.dataset.sp;
-      syncSpeedBtn();
-    });
+    spdBtn.innerHTML = '<i></i><input type="range" min="0" max="1000" step="1"><u></u>';
+    spdRange = spdBtn.querySelector('input');
+    spdOut = spdBtn.querySelector('u');
+    spdRange.value = Math.round(spdP * 1000);
+    // 끄는 동안에도 곧바로 반영된다 — 손을 떼야 바뀌면 얼마나 빠른지 알 수 없다
+    const slide = () => {
+      spdP = Math.max(0, Math.min(1, +spdRange.value / 1000));
+      try { localStorage.setItem('theland.spd', String(spdP)); } catch (e) {}
+      spdOut.textContent = spdLabel();
+    };
+    spdRange.addEventListener('input', slide);
+    spdRange.addEventListener('change', slide);
     dockEl().appendChild(spdBtn);
   }
   // 길을 따라갈 때뿐 아니라 **시점으로 걸을 때도** 쓴다
   const on = (routePts && routePts.length > 1) || fpv;
-  const sig = (on ? 1 : 0) + '|' + speedIdx + '|' + L.cur;
-  if (sig === spdBtn._sig) return;
-  spdBtn._sig = sig;
   spdBtn.className = on ? 'on' : '';
   spdBtn.title = L.s('걸음 빠르기', 'Travel speed');
-  spdBtn.innerHTML = '<i>' + escapeHTML(L.s('빠르기', 'Speed')) + '</i>' +
-    SPEEDS.map((v, i) => '<button data-sp="' + i + '"' +
-      (i === speedIdx ? ' class="sel"' : '') + '>\u00d7' + v + '</button>').join('');
+  spdBtn.querySelector('i').textContent = L.s('빠르기', 'Speed');
+  if (document.activeElement !== spdRange) spdRange.value = Math.round(spdP * 1000);
+  spdOut.textContent = spdLabel();
 }
 
 // 길 전체를 한 번에 물린다. 판을 열지 않고도 지울 수 있어야 한다.
@@ -3590,9 +3666,9 @@ function stepFollow() {
   // 화면이 초당 두 장씩 지나갔다 — ×0.5 로 줄여도 화면 한 장이다.
   // 이제 **보는 거리**로 상한을 둔다. 한 초에 화면 삼분의 일쯤 —
   // 그 안에서 긴 길은 빠르게, 짧은 길은 느긋하게 간다.
-  const want = Math.max(1.2, followTotal / 90);      // 길이가 정하는 빠르기
-  const cap = Math.max(1, cam.dist) * 0.35;          // 눈이 견디는 빠르기
-  followKm += dt * Math.min(want, cap) * SPEEDS[speedIdx];
+  // 보는 거리는 셈에 넣지 않는다. 확대했다고 굼떠지고 축소했다고 빨라지면
+  // 게이지를 잡아 놓은 뜻이 없다 — 어디서 보든 같은 빠르기다.
+  followKm += dt * Math.max(1.2, followTotal / 90) * spdMul();
   if (followKm >= followTotal) { followKm = followTotal; following = false; }
 
   const p = followAt(followKm);
@@ -4540,7 +4616,9 @@ uiBigCSS.textContent =
   'body.uibig #cMinus{font-size:25px}' +
   'body.uibig #goBtn,body.uibig #clrBtn,body.uibig #mkClrBtn{' +
   'height:50px;padding:0 19px;font-size:15px;border-radius:25px}' +
-  'body.uibig #spdBtn{padding:4px 5px 4px 13px}' +
+  'body.uibig #spdBtn{padding:9px 18px;gap:13px}' +
+  'body.uibig #spdBtn input{width:230px;height:5px}' +
+  'body.uibig #spdBtn>u{font-size:14px;min-width:54px}' +
   'body.uibig #spdBtn>i,body.uibig #travel>i,body.uibig #eyeh>i{font-size:13.5px}' +
   'body.uibig #spdBtn button,body.uibig #travel button,body.uibig #eyeh button{' +
   'height:38px;padding:0 13px;font-size:14px;border-radius:19px}' +
