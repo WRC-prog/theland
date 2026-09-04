@@ -656,27 +656,6 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       // 그래서 앱이 쓰는 것과 같은 눈금을 쓴다 — 사막빛 · 초원빛 · 마른
       // 풀빛 · 젖은 풀빛. 높이는 소금밭(-380 m 아래)과 바위 마루, 눈에만
       // 남겨 둔다. 비탈이 급한 데는 바위빛이 드러난다.
-      // 예전 높이 색 — **가나안 밖**에서는 이쪽이 낫다.
-      // 젖은 정도 모형은 레반트(해안선·분수령·지구대)를 위해 만든 것이라,
-      // 애굽·메소포타미아·소아시아·그리스에 갖다 대면 근거 없는 짐작이 된다.
-      vec3 rampH(float h, bool wet){
-        if (wet)       return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
-        if (h < 0.0)   return mix(vec3(0.44,0.41,0.27), vec3(0.35,0.46,0.26), clamp(h/-450.0+1.0,0.0,1.0));
-        if (h < 200.0) return mix(vec3(0.35,0.46,0.26), vec3(0.44,0.50,0.28), h/200.0);
-        if (h < 500.0) return mix(vec3(0.44,0.50,0.28), vec3(0.55,0.51,0.30), (h-200.0)/300.0);
-        if (h < 900.0) return mix(vec3(0.55,0.51,0.30), vec3(0.58,0.46,0.32), (h-500.0)/400.0);
-        if (h <1600.0) return mix(vec3(0.58,0.46,0.32), vec3(0.52,0.44,0.40), (h-900.0)/700.0);
-        return mix(vec3(0.52,0.44,0.40), vec3(0.88,0.89,0.92), clamp((h-1600.0)/900.0,0.0,1.0));
-      }
-      // 가나안 정밀 구역 한복판이면 1, 완전히 바깥이면 0. 테두리 0.5도에서
-      // 매끄럽게 떨어져, 두 칠하기가 이음매 없이 섞인다. (앱 coreBlend 와 같다)
-      float coreAt(float la, float lo){
-        float g = 0.5;
-        return min(min(smoothstep(0.0, 1.0, (lo - 33.90) / g),
-                       smoothstep(0.0, 1.0, (36.90 - lo) / g)),
-                   min(smoothstep(0.0, 1.0, (la - 30.20) / g),
-                       smoothstep(0.0, 1.0, (33.60 - la) / g)));
-      }
       vec3 ramp(float h, bool wet, float mo, float sl){
         if (wet) return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
         vec3 c;
@@ -745,9 +724,10 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
           vec2 mu = vec2((lo - moistB.x) / moistB.z, (la - moistB.y) / moistB.w);
           mo = texture2D(moistT, clamp(mu, 0.001, 0.999)).r;
         }
-        // 가나안 안에서는 젖은 정도로, 밖에서는 예전대로 높이로 칠한다.
-        vec3 col = hyps > 0.5 ? hypsRamp(h, wet)
-                 : mix(rampH(h, wet), ramp(h, wet, mo, 1.0 - n.y), coreAt(la, lo));
+        // 온 지도를 **한 팔레트**로 칠한다. 팔레트를 둘로 두었더니 가나안만
+        // 등불처럼 떠 보였다 — 색이 틀려서가 아니라 밝기가 안 맞아서였다.
+        // 젖은 정도 그림은 가나안 안팎을 이미 스스로 섞어 담고 있다.
+        vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet, mo, 1.0 - n.y);
 
         // ── 땅에 새긴 길 ─────────────────────────────────────
         // 길을 띠로 얹으면 아무리 다듬어도 「위에 붙인 테이프」다. 가까이서는
@@ -2485,10 +2465,17 @@ function wideMoist(la, lo, e) {
   } else if (la >= 36.2) {                           // 소아시아
     const pontic = sstepJS((la - 40.2) / 1.1);
     const aegean = 1 - sstepJS((lo - 28.6) / 2.2);
+    // 고원은 **타우로스 산맥 북쪽**부터다. 위도만 보고 잘랐더니 그 남쪽
+    // 킬리키아 평야(타르수스)까지 고원으로 쳐서 사막이 되어 있었다.
+    // 실제로는 이 해안이 소아시아에서 비가 가장 많은 축에 든다.
     const plateau = sstepJS((lo - 30.5) / 1.6) * (1 - sstepJS((lo - 38.5) / 2.0))
-                  * (1 - sstepJS((la - 39.6) / 1.2));
+                  * (1 - sstepJS((la - 39.6) / 1.2))
+                  * sstepJS((la - 37.15) / 0.7);
     m = 0.46 + 0.44 * pontic + 0.22 * aegean - 0.30 * plateau;
     m -= 0.34 * sstepJS((39.2 - la) / 1.6) * sstepJS((lo - 37.0) / 3.0);
+    // 킬리키아 평야와 오론테스 하구 — 타우로스 남쪽 해안
+    m += 0.30 * sstepJS((la - 35.8) / 0.5) * (1 - sstepJS((la - 37.3) / 0.5))
+              * sstepJS((lo - 33.4) / 0.6) * (1 - sstepJS((lo - 36.9) / 0.6));
   } else if (lo <= 33.2 && la <= 31.6) {             // 이집트·리비아 사막
     m = 0.02 + 0.30 * sstepJS((la - 30.2) / 1.1);
   } else if (la <= 30.6 && lo > 33.2) {              // 시나이 남부·북서 아라비아
