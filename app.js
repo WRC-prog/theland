@@ -725,15 +725,14 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
             float halo = smoothstep(t0 - 0.18, t0 + 0.02, mk);
             // 멀리서는 띠가 대신 그린다 — 겹치지 않게 스러진다
             float fade = 1.0 - smoothstep(70.0, 150.0, d);
-            // 페인트를 칠하는 것이 아니라 **닳은 땅**이다. 다만 한 가지 빛깔로
-            // 물들이면 밝은 땅에서는 묻혀 버린다(예루살렘 언저리가 그랬다).
-            // 그래서 **밝은 땅에서는 어둡게, 어두운 땅에서는 밝게** 기울인다.
-            float lum = dot(col, vec3(0.30, 0.59, 0.11));
-            vec3 dust = col * mix(1.26, 0.74, smoothstep(0.26, 0.52, lum));
-            dust = mix(dust, vec3(0.58, 0.50, 0.38), 0.28);
-            // 길섶에 옅은 그늘 한 줄 — 어떤 땅빛 위에서도 길이 드러난다
-            col = mix(col, col * 0.82, (halo - core) * 0.70 * fade);
-            col = mix(col, dust, core * 0.88 * fade);
+            // 다져진 길바닥은 풀도 흙도 벗겨진 자리라 **늘 둘레보다 밝다**.
+            // 밝은 땅에서는 어둡게 기울여 보았더니 그늘진 비탈에서 아예
+            // 사라져 버렸다. 그래서 밝기는 한 쪽으로만 — 언제나 밝게 —
+            // 두고, 대신 길섶에 머리카락 같은 그늘 한 줄을 둘러 밝은 땅
+            // 에서도 테두리가 잡히게 한다.
+            vec3 dust = mix(col, vec3(0.76, 0.68, 0.52), 0.60) * 1.10;
+            col = mix(col, col * 0.86, (halo - core) * 0.55 * fade);
+            col = mix(col, dust, core * 0.90 * fade);
           }
         }
 
@@ -3574,119 +3573,6 @@ function waterMaterial(color, opacity) {
   });
 }
 
-// ── 대해의 고래상어 ────────────────────────────────────────
-//
-// 옛 지도에는 바다마다 짐승이 한 마리씩 헤엄쳤다. 대해에도 한 마리 둔다.
-// 고래상어는 물고기 가운데 가장 큰 놈이면서 사람을 해치지 않는다 —
-// 「큰 물고기」라는 말에 이만한 그림도 없다.
-//
-// 지도를 읽는 데 방해가 되면 안 되니, 화면에서는 늘 손톱만 하게 잡히고
-// 아주 가까이 가거나 아주 멀리 물러서면 조용히 사라진다.
-let shark = null, sharkT = 0;
-function sharkTexture() {
-  const W = 660, H = 300, cy = H / 2;
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const g = c.getContext('2d');
-  const x0 = 44, x1 = 496;                    // 코끝 ~ 꼬리자루
-  const half = t => 6 + 62 * Math.sin(Math.pow(Math.max(t, 0), 0.58) * Math.PI) * (1 - 0.34 * t);
-  const skin = '#2b4356', spot = 'rgba(232,240,245,.85)';
-
-  // 가슴지느러미 — 넓적하게 뒤로 눕는다
-  g.fillStyle = skin;
-  for (const sgn of [-1, 1]) {
-    g.beginPath();
-    g.moveTo(x0 + 96, cy + sgn * 44);
-    g.quadraticCurveTo(x0 + 150, cy + sgn * 128, x0 + 214, cy + sgn * 132);
-    g.quadraticCurveTo(x0 + 178, cy + sgn * 74, x0 + 168, cy + sgn * 40);
-    g.closePath(); g.fill();
-    // 배지느러미 — 작게
-    g.beginPath();
-    g.moveTo(x0 + 286, cy + sgn * 32);
-    g.quadraticCurveTo(x0 + 320, cy + sgn * 80, x0 + 358, cy + sgn * 78);
-    g.quadraticCurveTo(x0 + 334, cy + sgn * 48, x0 + 330, cy + sgn * 28);
-    g.closePath(); g.fill();
-  }
-  // 몸통
-  g.beginPath();
-  for (let i = 0; i <= 40; i++) { const t = i / 40; const x = x0 + (x1 - x0) * t;
-    if (i) g.lineTo(x, cy - half(t)); else g.moveTo(x, cy - half(t)); }
-  for (let i = 40; i >= 0; i--) { const t = i / 40; g.lineTo(x0 + (x1 - x0) * t, cy + half(t)); }
-  g.closePath(); g.fill();
-  // 꼬리 — 위쪽 날이 긴 초승달
-  g.beginPath();
-  g.moveTo(x1 - 6, cy - 12); g.lineTo(x1 - 6, cy + 12);
-  g.quadraticCurveTo(W - 78, cy + 66, W - 32, cy + 88);
-  g.quadraticCurveTo(W - 66, cy + 18, W - 60, cy);
-  g.quadraticCurveTo(W - 66, cy - 24, W - 18, cy - 128);
-  g.quadraticCurveTo(W - 80, cy - 74, x1 - 6, cy - 12);
-  g.closePath(); g.fill();
-  // 등지느러미 두 개 (위에서 보면 등마루에 얹힌 삼각형)
-  g.fillStyle = '#22374a';
-  for (const [bx, bw, bh] of [[x0 + 232, 74, 40], [x0 + 356, 40, 22]]) {
-    g.beginPath(); g.moveTo(bx, cy - 4); g.lineTo(bx + bw, cy - 2);
-    g.lineTo(bx + bw * 0.34, cy - bh); g.closePath(); g.fill();
-  }
-  // 흰 점무늬 — 고래상어를 고래상어로 알아보게 하는 것
-  g.fillStyle = spot;
-  for (let i = 0; i < 14; i++) {
-    const t = 0.10 + i * 0.062;
-    const hw = half(t);
-    for (let k = -3; k <= 3; k++) {
-      if (Math.abs(k) * 26 > hw - 8) continue;
-      const x = x0 + (x1 - x0) * t + ((i % 2) ? 7 : 0);
-      const y = cy + k * (hw / 3.4);
-      g.beginPath(); g.arc(x, y, 4.1, 0, 6.284); g.fill();
-    }
-  }
-  // 눈 — 넓적한 머리 양옆
-  g.fillStyle = '#0d1a24';
-  g.beginPath(); g.arc(x0 + 26, cy - half(0.06) + 5, 5, 0, 6.284); g.fill();
-  g.beginPath(); g.arc(x0 + 26, cy + half(0.06) - 5, 5, 0, 6.284); g.fill();
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.minFilter = tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
-  return tex;
-}
-
-function addShark() {
-  if (shark) return;
-  const g = new THREE.PlaneBufferGeometry(1, 300 / 660);
-  g.rotateX(-Math.PI / 2);
-  const m = new THREE.MeshBasicMaterial({ map: sharkTexture(), transparent: true,
-    opacity: 0.9, depthWrite: false, side: THREE.DoubleSide });
-  shark = new THREE.Mesh(g, m);
-  shark.renderOrder = 3;
-  shark.frustumCulled = false;
-  scene.add(shark);
-}
-
-/** 천천히 한 바퀴 돈다 — 대해 한복판을 오 분에 한 바퀴쯤 */
-function swimShark(dt) {
-  if (!shark) return;
-  sharkT += dt;
-  const a = sharkT / 300 * Math.PI * 2;                 // 오 분에 한 바퀴
-  const lat = 32.70 + 0.42 * Math.sin(a) + 0.06 * Math.sin(a * 3.1);
-  const lon = 33.45 + 0.95 * Math.cos(a);
-  const x = worldX(lon), z = worldZ(lat);
-  // 나아가는 쪽으로 머리를 둔다
-  const a2 = a + 0.02;
-  const dx = worldX(33.45 + 0.95 * Math.cos(a2)) - x;
-  const dz = worldZ(32.70 + 0.42 * Math.sin(a2) + 0.06 * Math.sin(a2 * 3.1)) - z;
-  shark.position.set(x, 0.03, z);
-  shark.rotation.y = Math.atan2(-dz, dx);
-  // 화면에서 늘 비슷한 크기로
-  const dd = Math.max(1, camera.position.distanceTo(shark.position));
-  const k = 2 * Math.tan(camera.fov * Math.PI / 360);
-  const sc = Math.max(0.4, dd * k * 0.055);
-  shark.scale.set(sc, sc, sc);
-  // 너무 가까우면 물러나고 너무 멀면 사라진다
-  const near = Math.min(1, Math.max(0, (cam.dist - 7) / 10));
-  const far = 1 - Math.min(1, Math.max(0, (cam.dist - 700) / 350));
-  shark.material.opacity = 0.9 * near * far;
-  shark.visible = shark.material.opacity > 0.02;
-}
-
 function addLakes() {
   for (const l of LAKES) {
     const tri = earClip(l.ring);
@@ -4432,7 +4318,6 @@ let fpvT = 0;
 function tick() {
   requestAnimationFrame(tick);
   syncDrapeDepth();
-  swimShark(1 / 60);
   stepKeys();
   if (fpv) { const n = performance.now(); stepFpv(fpvT ? Math.min(120, n - fpvT) : 16); fpvT = n; }
   else fpvT = 0;
@@ -4464,7 +4349,6 @@ function tick() {
     const canaanClip = tileRect(canaan, SEAM_KM);
 
     addLakes();
-    addShark();
     syncAreas();
     bindControls();
     addViewButtons();
