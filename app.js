@@ -158,6 +158,8 @@ function qualFile(f, t) {
 let SITES = [], EVENTS = [], NOTES = new Map(), I18N = null, TERRAIN = null;
 // 가나안 바깥의 큰 강 · 지도에 그려진 항로의 굽이 · 여정의 주제 묶음
 let BIGRIVERS = [], LANES = [], JGROUPS = [];
+// 토막들을 한 줄로 이어 붙인 여정의 이름들 — 「한번에 보기」가 이것을 쓴다
+const WHOLEKO = new Set();
 const LANEMAP = new Map();
 let byPlace = new Map();          // 지명 → 사건들
 let siteByName = new Map();
@@ -362,9 +364,11 @@ async function loadAll() {
                      detailKo: '출생에서 마지막 유월절까지 한 줄로',
                      detailEn: 'From his birth to the last Passover, in one line',
                      stops: stops, followTerrain: 1 });
+      WHOLEKO.add('예수 — 전 여정');
     }
   }
   JGROUPS.push({ ko: '예수 그리스도의 발자취', en: 'In the footsteps of Jesus Christ',
+                 all: '예수 — 전 여정',
                  names: JESUS.map(p => p.ko).concat(['예수 — 전 여정']) });
 
   for (const w of WHOLE) {
@@ -379,6 +383,8 @@ async function loadAll() {
       for (const st of p.stops) { if (stops[stops.length - 1] === st) continue; stops.push(st); }
     PRESETS.push({ ko: w.ko, en: w.en, detailKo: w.dko, detailEn: w.den,
                    stops: stops, followTerrain: parts[0].followTerrain });
+    WHOLEKO.add(w.ko);
+    g.all = w.ko;
   }
 
   say('자료 ' + EVENTS.length + '건 · 지명 ' + SITES.length + '곳', 20);
@@ -4224,6 +4230,7 @@ jgrpCSS.textContent =
   '.jgrp>summary b{font-size:14.5px;font-weight:600;flex:1}' +
   '.jgrp>summary u{text-decoration:none;font-size:11.5px;color:#8d867a;' +
   'border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:1px 7px}' +
+  '.jall{padding:2px 2px 8px 18px}' +
   '.jgrp .ep{padding-left:18px}' +
   '.jgrp .ep:last-child{border-bottom:0}';
 document.head.appendChild(jgrpCSS);
@@ -4271,10 +4278,16 @@ function openRoutes() {
                                 .filter(i2 => i2 >= 0);
     rows.forEach(i2 => used.add(i2));
     if (!rows.length) return '';
+    // 토막이 둘 이상이면 「한번에 보기」 — 그 묶음의 길을 한 줄로 잇는다.
+    // (이미 한 줄짜리만 모아 둔 묶음에는 붙이지 않는다 — 이을 것이 없다)
+    const solo = (g.names || []).filter(n => !WHOLEKO.has(n));
+    const all = solo.length >= 2
+      ? '<div class="jall"><button class="rbtn" data-all="' + gi + '">' +
+        escapeHTML(L.s('한번에 보기', 'See it all')) + '</button></div>' : '';
     return '<details class="jgrp" data-g="' + gi + '"' +
       (openGroups.has(gi) ? ' open' : '') + '><summary><b>' +
       escapeHTML(L.cur === 'ko' ? g.ko : g.en) + '</b><u>' + rows.length +
-      escapeHTML(L.s('개', '')) + '</u></summary>' +
+      escapeHTML(L.s('개', '')) + '</u></summary>' + all +
       rows.map(jrnCard).join('') + '</details>';
   }).join('');
   // 어느 주제에도 들지 못한 여정이 있으면 빠뜨리지 않는다
@@ -4293,6 +4306,31 @@ document.getElementById('pb').addEventListener('toggle', ev => {
 }, true);
 
 onTap(document.getElementById('pb'), ev => {
+  // 묶음 하나를 한 줄로 — 「한번에 보기」
+  const ab = ev.target.closest('[data-all]');
+  if (ab) {
+    const g = JGROUPS[+ab.dataset.all];
+    if (!g) return;
+    const whole = g.all ? PRESETS.find(x => x.ko === g.all) : null;
+    let stops;
+    if (whole) stops = whole.stops;
+    else {
+      stops = [];
+      for (const n of (g.names || [])) {
+        if (WHOLEKO.has(n)) continue;
+        const q = PRESETS.find(x => x.ko === n);
+        if (!q) continue;
+        for (const st of q.stops) { if (stops[stops.length - 1] === st) continue; stops.push(st); }
+      }
+    }
+    following = false; followKm = 0;
+    const km = setRoute(stops.map(n => siteByName.get(n)).filter(Boolean));
+    frameRoute();
+    openRoutes();
+    document.getElementById('pSub').textContent =
+      Math.round(km) + L.s(' km · ' + stops.length + '곳', ' km · ' + stops.length + ' stops');
+    return;
+  }
   const j = ev.target.closest('.jrn');
   if (j) {
     const p = PRESETS[+j.dataset.j];
