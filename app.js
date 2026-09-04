@@ -646,16 +646,27 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         if (h < 3000.0) return mix(vec3(0.74,0.53,0.38), vec3(0.80,0.74,0.73), (h-2000.0)/1000.0);
         return mix(vec3(0.80,0.74,0.73), vec3(1.0,1.0,1.0), clamp((h-3000.0)/1600.0,0.0,1.0));
       }
-      vec3 ramp(float h, bool wet){
-        // 표고 색 — 바다, 저지, 들, 구릉, 산, 눈
-        if (wet)       return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
-        // 해수면보다 낮은 마른 땅 — 지구대 바닥의 먼지빛
-        if (h < 0.0)   return mix(vec3(0.44,0.41,0.27), vec3(0.35,0.46,0.26), clamp(h/-450.0+1.0,0.0,1.0));
-        if (h < 200.0) return mix(vec3(0.35,0.46,0.26), vec3(0.44,0.50,0.28), h/200.0);
-        if (h < 500.0) return mix(vec3(0.44,0.50,0.28), vec3(0.55,0.51,0.30), (h-200.0)/300.0);
-        if (h < 900.0) return mix(vec3(0.55,0.51,0.30), vec3(0.58,0.46,0.32), (h-500.0)/400.0);
-        if (h <1600.0) return mix(vec3(0.58,0.46,0.32), vec3(0.52,0.44,0.40), (h-900.0)/700.0);
-        return mix(vec3(0.52,0.44,0.40), vec3(0.88,0.89,0.92), clamp((h-1600.0)/900.0,0.0,1.0));
+      // 땅빛은 **높이가 아니라 젖은 정도**가 정한다.
+      //
+      // 높이로만 칠했더니 지도가 거꾸로 되어 있었다 — 예루살렘 마루(750 m)는
+      // 메마른 황토빛이 되고, 그 동쪽으로 뚝 떨어지는 유다 광야는 낮다는
+      // 이유로 초록이 되었다. 실제로는 정반대다. 분수령 동쪽은 비그늘에
+      // 들어 사막이고, 마루 쪽은 비를 받아 푸르다.
+      //
+      // 그래서 앱이 쓰는 것과 같은 눈금을 쓴다 — 사막빛 · 초원빛 · 마른
+      // 풀빛 · 젖은 풀빛. 높이는 소금밭(-380 m 아래)과 바위 마루, 눈에만
+      // 남겨 둔다. 비탈이 급한 데는 바위빛이 드러난다.
+      vec3 ramp(float h, bool wet, float mo, float sl){
+        if (wet) return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
+        vec3 c;
+        if (mo > 0.55)      c = mix(vec3(0.48,0.51,0.27), vec3(0.27,0.38,0.18), clamp((mo-0.55)/0.45,0.0,1.0));
+        else if (mo > 0.28) c = mix(vec3(0.73,0.66,0.42), vec3(0.48,0.51,0.27), clamp((mo-0.28)/0.27,0.0,1.0));
+        else                c = mix(vec3(0.85,0.77,0.57), vec3(0.73,0.66,0.42), clamp(mo/0.28,0.0,1.0));
+        if (h < -380.0) c = mix(c, vec3(0.90,0.89,0.84), smoothstep(0.0, 1.0, (-380.0-h)/45.0));
+        c = mix(c, vec3(0.66,0.62,0.55), smoothstep(0.0, 1.0, (sl-0.30)/0.5));
+        if (h > 1500.0) c = mix(c, vec3(0.66,0.62,0.55), smoothstep(0.0, 1.0, (h-1500.0)/400.0));
+        if (h > 1950.0) c = mix(c, vec3(0.97,0.97,0.99), smoothstep(0.0, 1.0, (h-1950.0)/350.0));
+        return c;
       }
       // 칸과 칸 사이를 **이어서** 읽는다.
       //
@@ -700,14 +711,20 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         // 자리에 네모난 테두리가 드러났다.
         vec3 n = normalize(vec3((hl - hr) * vexf / (2.0 * mpp.x), 1.0,
                                 (hu - hd) * vexf / (2.0 * mpp.y)));
-        float lo = geo.x + vWorld.x / geo.z;
+        float lo = geo.x + vWorld.x / geo.z;   // 땅빛에도 쓴다
         float la = geo.y - vWorld.z / geo.w;
         bool wet = wetAt(h, la, lo);
         float d = length(vWorld - cameraPosition);   // 길 자국 굵기에도 쓴다
 
         // 손으로 얹던 잔결과 돌빛은 걷어냈다. 실측 자료가 제 결을 가지고
         // 있으니 지어낸 무늬를 덧바를 까닭이 없다.
-        vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet);
+        // 젖은 정도 — 미리 구워 둔 그림에서 읽는다 (없으면 가운데 값)
+        float mo = 0.42;
+        if (farmOn > 0.5) {
+          vec2 mu = vec2((lo - moistB.x) / moistB.z, (la - moistB.y) / moistB.w);
+          mo = texture2D(moistT, clamp(mu, 0.001, 0.999)).r;
+        }
+        vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet, mo, 1.0 - n.y);
 
         // ── 땅에 새긴 길 ─────────────────────────────────────
         // 길을 띠로 얹으면 아무리 다듬어도 「위에 붙인 테이프」다. 가까이서는
@@ -1265,10 +1282,13 @@ let fpv = false, fpvBtn = null;
 const EYES = [1.7, 40, 120, 380, 900, 2000, 4500];
 let eyeIdx = 3, eyeEl = null;
 function eyeM_() { return EYES[eyeIdx]; }
+// 실제 걸음에 맞춘다. 예전에는 걷기를 6 m/s (21 km/h) 로 잡았는데 그건
+// 걷는 것이 아니라 뛰는 것이다. 대신 빠르기(×0.5~×4)를 시점에서도 쓸 수
+// 있게 해서, 멀리 갈 때는 빠르게 감을 수 있다.
 const TRAVEL = [
-  { ko: '걷기', en: 'Walk',    mps: 6  },
-  { ko: '낙타', en: 'Camel',   mps: 14 },
-  { ko: '전차', en: 'Chariot', mps: 30 }
+  { ko: '걷기', en: 'Walk',    mps: 1.4 },   // 5 km/h — 사람 걸음
+  { ko: '낙타', en: 'Camel',   mps: 4.0 },   // 14 km/h — 낙타 속보
+  { ko: '전차', en: 'Chariot', mps: 9.0 }    // 32 km/h — 전차
 ];
 let travelIdx = 0;
 const joyVec = { x: 0, y: 0 };
@@ -1277,7 +1297,7 @@ let joyEl = null, joyKnob = null, travelEl = null;
 function stepFpv(dt) {
   if (!fpv) return;
   if (!joyVec.x && !joyVec.y) return;
-  const step = TRAVEL[travelIdx].mps * dt / 1000;       // 미터/초 → km
+  const step = TRAVEL[travelIdx].mps * SPEEDS[speedIdx] * dt / 1000;   // 미터/초 → km
   const sa = Math.sin(cam.az), ca = Math.cos(cam.az);
   // 앞은 시선 쪽, 옆은 그 오른쪽
   const f = -joyVec.y * step, r = joyVec.x * step;
@@ -1383,6 +1403,7 @@ function syncTravel() {
       '<u>m</u>';
   }
   if (joyEl) joyEl.className = fpv ? 'on' : '';
+  syncSpeedBtn();
 }
 
 function setFpv(on) {
@@ -3073,10 +3094,12 @@ function syncSpeedBtn() {
     });
     dockEl().appendChild(spdBtn);
   }
-  const sig = (routePts && routePts.length > 1 ? 1 : 0) + '|' + speedIdx + '|' + L.cur;
+  // 길을 따라갈 때뿐 아니라 **시점으로 걸을 때도** 쓴다
+  const on = (routePts && routePts.length > 1) || fpv;
+  const sig = (on ? 1 : 0) + '|' + speedIdx + '|' + L.cur;
   if (sig === spdBtn._sig) return;
   spdBtn._sig = sig;
-  spdBtn.className = (routePts && routePts.length > 1) ? 'on' : '';
+  spdBtn.className = on ? 'on' : '';
   spdBtn.title = L.s('걸음 빠르기', 'Travel speed');
   spdBtn.innerHTML = '<i>' + escapeHTML(L.s('빠르기', 'Speed')) + '</i>' +
     SPEEDS.map((v, i) => '<button data-sp="' + i + '"' +
@@ -4376,6 +4399,7 @@ function tick() {
       // 능선에서 길이 파묻히거나 떠올랐다.
       buildGrid(canaan, texC.image, 1500, 1700);
       placeSites();
+      buildMoist();         // 땅빛은 젖은 정도로 칠한다 — 높이 격자가 있어야 굽는다
       addRivers();          // 강은 땅 높이를 알아야 얹을 수 있다
       toggleRoads();        // 옛길은 앱처럼 처음부터 깔아 둔다
       applyCam();
