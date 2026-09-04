@@ -1109,7 +1109,11 @@ function updateLabels() {
     // 지역이 같은 이름·같은 자리인 곳에서 둘이 포개져 읽을 수가 없었다.
     cand.push({ s, keep: keep, key: key, sx: (v.x * .5 + .5) * innerWidth,
                 sy: (-v.y * .5 + .5) * innerHeight - (s.era ? 34 : 0), d,
-                score: (keep ? -2000000 : era ? -900000 : key ? -60000 : s.rank * 1000) + d
+                // 주요 도시끼리도 등급 차례는 지켜야 한다. 다 같이 -60000 으로
+                // 눌러 놓았더니 물러섰을 때 예루살렘(0등급)이 베들레헴(1등급)에
+                // 밀려 사라졌다 — 자리다툼이 거리만으로 판가름 났기 때문이다.
+                score: (keep ? -2000000 : era ? -900000
+                             : (key ? -60000 : 0) + s.rank * 1000) + d
                        - (was ? 520 : 0) });
   }
   cand.sort((a, b) => a.score - b.score);
