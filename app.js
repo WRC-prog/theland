@@ -1133,7 +1133,15 @@ function toggleMark(s) {
 // 지파·민족 이름표에 쓸 그 땅의 색 (이름 → [r,g,b])
 const AREACOLOR = new Map();
 let highlight = null;
-let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
+// 이번에 끈 만큼(화면 픽셀) — 끌었으면 누른 것이 아니다.
+//
+// 예전에는 이것이 **거리가 아니라 pointermove 가 몇 번 왔는가**였다.
+// 마우스는 누르는 동안 가만히 있으니 0 이지만, 트랙패드는 손가락이
+// 눌린 채 미세하게 흔들려 네댓 번은 그냥 온다. 그래서 맥북에서는 지명을
+// 눌러도 「끌다가 뗀 것」으로 여겨져 카드가 뜨지 않았다. 이제 누른 자리에서
+// **얼마나 벗어났는지**를 잰다.
+let moved = 0, downAt = null;
+const TAPSLOP = 8;                 // 이만큼까지는 흔들려도 누른 것으로 본다
 
 function labelCap() { return innerWidth < 560 ? 52 : 130; }
 
@@ -1344,7 +1352,7 @@ function updateLabels() {
     el.className = 'lab';
     el.addEventListener('click', ev => {
       ev.stopPropagation();
-      if (moved > 3) return;                 // 지도를 끌다가 뗀 것뿐이다
+      if (moved > TAPSLOP) return;           // 지도를 끌다가 뗀 것뿐이다
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
     labelRoot.appendChild(el); labelPool.push(el);
@@ -1784,7 +1792,7 @@ function bindControls() {
   addEventListener('pointerdown', e => {
     if (overUI(e.target)) return;
     stopFly();                                // 손을 대면 날아가던 것은 그만둔다
-    moved = 0;
+    moved = 0; downAt = { x: e.clientX, y: e.clientY };
     try { el.setPointerCapture(e.pointerId); } catch (_) {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) {
@@ -1801,7 +1809,8 @@ function bindControls() {
 
   addEventListener('pointermove', e => {
     if (!pts.has(e.pointerId)) return;
-    moved++;
+    if (downAt) moved = Math.max(moved,
+      Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y));
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (mode === 'two' && pts.size >= 2) {
@@ -1840,14 +1849,14 @@ function bindControls() {
   const end = e => {
     // 지도를 톡 누르면 옆 판이 닫힌다. ✕ 는 손가락에 견주어 작아서,
     // 폰에서는 몇 번을 눌러도 안 닫힌다는 말을 들었다. (끌었을 때는 그대로)
-    if (e.type === 'pointerup' && !overUI(e.target) && moved <= 3)
+    if (e.type === 'pointerup' && !overUI(e.target) && moved <= TAPSLOP)
       panel.classList.remove('open');
     pts.delete(e.pointerId);
     try { el.releasePointerCapture(e.pointerId); } catch (_) {}
     if (pts.size === 1) {
       const v = [...pts.values()][0];
       mode = 'pan'; last = { x: v.x, y: v.y };
-    } else if (pts.size === 0) { mode = null; last = null; }
+    } else if (pts.size === 0) { mode = null; last = null; downAt = null; }
   };
   addEventListener('pointerup', end);
   addEventListener('pointercancel', end);
