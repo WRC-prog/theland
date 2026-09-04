@@ -2666,9 +2666,11 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
       '    c = mix(c, c * 1.10, rut * 0.5);',
       '    c = mix(c, c * 0.86, (1.0 - smoothstep(0.0, 0.18, e)) * 0.7);',
       '  }',
-      '  // 땅에 길을 새겨 둔 자리에서는, 다가갈수록 띠가 스러진다 —',
-      '  // 둘이 겹치면 길이 두 겹으로 보인다.',
-      '  if (rOn > 0.5) {',
+      '  // 땅에 길을 새겨 둔 자리에서는, 다가갈수록 **길 띠만** 스러진다 —',
+      '  // 둘이 겹치면 길이 두 겹으로 보이기 때문이다. 강과 경로는 땅에',
+      '  // 새긴 것이 없으니 여기에 걸리면 안 된다. grain 이 그 표다.',
+      '  // (이 조건을 빠뜨려 다가가면 요단강이 통째로 사라졌다)',
+      '  if (grain > 0.5 && rOn > 0.5) {',
       '    float lo = rGeo.x + vW.x / rGeo.z;',
       '    float la = rGeo.y - vW.z / rGeo.w;',
       '    if (lo > rB.x && lo < rB.x + rB.z && la > rB.y && la < rB.y + rB.w)',
@@ -3452,7 +3454,8 @@ function syncRoadMask() {
     m.uniforms.roadOn.value = (roadTex && roadShow) ? 1 : 0;
   }
   for (const m of drapeMats) {
-    if (!m.uniforms.rOn) continue;
+    // 길에만 걸어야 한다 — 강·경로까지 스러뜨리면 안 된다
+    if (!m.uniforms.rOn || !m.uniforms.grain || m.uniforms.grain.value < 0.5) continue;
     if (roadBnd) m.uniforms.rB.value = roadBnd;
     m.uniforms.rOn.value = (roadTex && roadShow) ? 1 : 0;
   }
