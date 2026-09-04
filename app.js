@@ -1872,8 +1872,14 @@ function bindControls() {
       return;
     }
     if (e.altKey) {                        // ⌥ + 두 손가락 — 돌리고 기울이기
-      cam.az -= e.deltaX * 0.006;
-      cam.el += e.deltaY * 0.006;
+      // 손가락이 가는 쪽과 반대로 돌던 것을 바로잡는다.
+      //
+      // 끌 때는 「손가락이 간 만큼」(dx, dy)이 들어오는데, 바퀴는 그 반대인
+      // 「내용이 밀려난 만큼」(deltaX, deltaY)이 들어온다. 옮기기 쪽은 그래서
+      // 부호를 뒤집어 쓰는데(panBy(-deltaX, -deltaY)) 여기만 그대로 썼다.
+      // 그래서 트랙패드로 ⌥ 를 누른 채 밀면 상하좌우가 죄다 거꾸로 돌았다.
+      cam.az += e.deltaX * 0.006;
+      cam.el -= e.deltaY * 0.006;
       applyCam();
       return;
     }
