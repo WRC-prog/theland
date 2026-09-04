@@ -1296,6 +1296,21 @@ let highlight = null;
 let moved = 0, downAt = null;
 const TAPSLOP = 8;                 // 이만큼까지는 흔들려도 누른 것으로 본다
 
+// 이름표를 누른 자리.
+//
+// 지도의 moved 를 그대로 썼더니 손가락에서 **되었다 안 되었다** 했다.
+// 이름표를 누를 때는 지도 쪽 pointerdown 이 아예 비켜서므로 moved 가
+// 갱신되지 않는다 — 곧 **직전에 지도를 끈 값이 그대로 남아 있다.**
+// 지도를 크게 끌고 나서 지명을 누르면 「끌다가 뗀 것」으로 여겨져 무시되고,
+// 살짝 누르고 나서 누르면 먹혔다. 그래서 이름표는 제 누름 자리를 따로 잰다.
+// 손가락은 마우스보다 훨씬 흔들리므로 넉넉히 18 px 까지 눌린 것으로 본다.
+let labDown = null;
+const LABSLOP = 18;
+function labSlid(ev) {
+  if (!labDown || ev.clientX == null) return false;
+  return Math.hypot(ev.clientX - labDown.x, ev.clientY - labDown.y) > LABSLOP;
+}
+
 function labelCap() { return innerWidth < 560 ? 52 : 130; }
 
 // ── 툴바 크기 ─────────────────────────────────────────────
@@ -1503,9 +1518,12 @@ function updateLabels() {
   while (labelPool.length < out.length) {
     const el = document.createElement('div');
     el.className = 'lab';
+    el.addEventListener('pointerdown', ev => {
+      labDown = { x: ev.clientX, y: ev.clientY };
+    });
     onTap(el, ev => {
       ev.stopPropagation();
-      if (moved > TAPSLOP) return;           // 지도를 끌다가 뗀 것뿐이다
+      if (labSlid(ev)) return;               // 누른 게 아니라 문지른 것이다
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
     labelRoot.appendChild(el); labelPool.push(el);
@@ -3712,8 +3730,12 @@ function updateStopMarks() {
   while (markPool.length < need) {
     const el = document.createElement('div');
     el.className = 'rmark';
+    el.addEventListener('pointerdown', ev => {
+      labDown = { x: ev.clientX, y: ev.clientY };
+    });
     onTap(el, ev => {
       ev.stopPropagation();
+      if (labSlid(ev)) return;
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
     labelRoot.appendChild(el);
@@ -4716,6 +4738,10 @@ onTap(document.getElementById('pb'), ev => {
 
 const labSizeCSS = document.createElement('style');
 labSizeCSS.textContent =
+  // 손가락으로 짚을 자리를 넓힌다. 글자만큼만 잡히면 열 번에 서너 번은
+  // 빗나간다 — 글씨는 그대로 두고 둘레의 빈 자리만 넓혀 준다.
+  '.lab{touch-action:manipulation}' +
+  '@media (pointer:coarse){.lab{padding:8px 11px}.rmark{padding:10px 15px 10px 8px}}' +
   // 상 — 큰 도시
   '.lab.r0{font-size:19px;font-weight:800;letter-spacing:.01em}' +
   '.lab.r1{font-size:15.5px;font-weight:700}' +
