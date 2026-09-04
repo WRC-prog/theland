@@ -3521,8 +3521,16 @@ function stepFollow() {
   const now = performance.now();
   const dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
-  // 마흔 초쯤에 다 걷도록 — 길이가 얼마든 지루하지 않게
-  followKm += dt * Math.max(2, followTotal / 40) * SPEEDS[speedIdx];
+  // 눈이 느끼는 빠르기는 「한 초에 화면 몇 개를 지나는가」다.
+  //
+  // 예전에는 길이만 보고 「마흔 초에 다 걷도록」 잡았다. 그래서 이천 킬로미터
+  // 짜리 길에서는 한 초에 오십 킬로미터씩 흘러, 스물여섯 킬로미터가 담기는
+  // 화면이 초당 두 장씩 지나갔다 — ×0.5 로 줄여도 화면 한 장이다.
+  // 이제 **보는 거리**로 상한을 둔다. 한 초에 화면 삼분의 일쯤 —
+  // 그 안에서 긴 길은 빠르게, 짧은 길은 느긋하게 간다.
+  const want = Math.max(1.2, followTotal / 90);      // 길이가 정하는 빠르기
+  const cap = Math.max(1, cam.dist) * 0.35;          // 눈이 견디는 빠르기
+  followKm += dt * Math.min(want, cap) * SPEEDS[speedIdx];
   if (followKm >= followTotal) { followKm = followTotal; following = false; }
 
   const p = followAt(followKm);
