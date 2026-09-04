@@ -1471,7 +1471,8 @@ function bindControls() {
   // 화면 위에 얹힌 것들은 지도가 아니다. 여기에 빠뜨리면 그 위에서 누른
   // 손가락을 그림판이 가로채, 단추가 눌리지 않는다.
   const overUI = t => !!(t && t.closest &&
-    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #joy, #travel, #eyeh, #bareBtn'));
+    t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #mkClrBtn, ' +
+              '#joy, #travel, #eyeh, #bareBtn'));
 
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
   // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
@@ -3083,6 +3084,39 @@ function syncClrBtn() {
   clrBtn.textContent = L.s('\u2715 경로 지우기', '\u2715 Clear route');
 }
 
+// 표시해 둔 곳도 한 번에 물릴 수 있어야 한다. 성구 한 줄에서 열댓 곳을
+// 표시해 놓고 하나씩 다시 눌러 끄는 것은 일이 아니라 벌이다.
+let mkClrBtn = null;
+function syncMarkClr() {
+  if (!mkClrBtn) {
+    mkClrBtn = document.createElement('button');
+    mkClrBtn.id = 'mkClrBtn';
+    onTap(mkClrBtn, () => {
+      const n = MARKED.size;
+      if (!n) return;
+      MARKED.clear(); saveMarked();
+      updateLabels(); syncMarkClr();
+      if (cardSite) showCard(cardSite);
+      toast(L.s('표시를 지웠습니다 (' + n + '곳)', 'Cleared ' + n + ' marks'));
+    });
+    actsEl().appendChild(mkClrBtn);
+    const st = document.createElement('style');
+    st.textContent =
+      '#mkClrBtn{display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
+      'padding:0 15px;height:42px;border-radius:21px;background:rgba(20,20,24,.9);' +
+      'color:#fbe0a6;font:700 13px/1 inherit}' +
+      '#mkClrBtn.on{display:block}' +
+      '@media (max-width:560px){#mkClrBtn{padding:0 12px;font-size:12.5px}}';
+    document.head.appendChild(st);
+  }
+  const n = MARKED.size;
+  const sig = n + '|' + L.cur;
+  if (sig === mkClrBtn._sig) return;
+  mkClrBtn._sig = sig;
+  mkClrBtn.className = n ? 'on' : '';
+  mkClrBtn.textContent = L.s('\u2715 표시 지우기 (' + n + ')', '\u2715 Clear marks (' + n + ')');
+}
+
 // 길이 서면 지도 위에 바로 뜨는 단추. 판을 열고 또 누를 까닭이 없다.
 let goBtn = null;
 function syncGoBtn() {
@@ -3117,6 +3151,7 @@ function updateStopMarks() {
   syncGoBtn();
   syncSpeedBtn();
   syncClrBtn();
+  syncMarkClr();
   syncRunner();
   const need = routeStops.length;
   while (markPool.length < need) {
