@@ -1503,7 +1503,7 @@ function updateLabels() {
   while (labelPool.length < out.length) {
     const el = document.createElement('div');
     el.className = 'lab';
-    el.addEventListener('click', ev => {
+    onTap(el, ev => {
       ev.stopPropagation();
       if (moved > TAPSLOP) return;           // 지도를 끌다가 뗀 것뿐이다
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
@@ -1937,13 +1937,24 @@ function bindControls() {
     t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #mkClrBtn, ' +
               '#joy, #travel, #eyeh, #bareBtn'));
 
+  // 지도 위에 떠 있는 이름표와 경로 표지.
+  //
+  // 마우스와 트랙패드에서 지명이 눌리지 않던 참 까닭이 여기 있었다.
+  // 이름표를 누르면 아래 pointerdown 이 그림판으로 손가락을 **가로챈다**
+  // (setPointerCapture). 그러면 뒤이어 오는 mouseup 도 그림판으로 가고,
+  // click 은 이름표가 아니라 그림판에서 일어난다 — 이름표의 손잡이는
+  // 영영 부르지 못한다. 손가락(터치)은 제 나름의 규칙이 있어 멀쩡했으니
+  // 아이패드에서는 되고 맥에서만 안 되었던 것이다.
+  // 이름표는 지도가 아니라 **단추**다. 여기서 아예 손을 떼게 한다.
+  const overLab = t => !!(t && t.closest && t.closest('.lab, .rmark'));
+
   // 왼쪽 단추로 그냥 끌면 **옮기기**. 지도는 그게 맞다.
   // 돌리고 기울이는 것은 오른쪽 단추(또는 ⇧·⌘·ctrl 을 누른 채) — 손가락은 둘.
   const orbitish = e => e.button === 2 || e.button === 1
     || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
 
   addEventListener('pointerdown', e => {
-    if (overUI(e.target)) return;
+    if (overUI(e.target) || overLab(e.target)) return;
     stopFly();                                // 손을 대면 날아가던 것은 그만둔다
     moved = 0; downAt = { x: e.clientX, y: e.clientY };
     try { el.setPointerCapture(e.pointerId); } catch (_) {}
@@ -2002,7 +2013,8 @@ function bindControls() {
   const end = e => {
     // 지도를 톡 누르면 옆 판이 닫힌다. ✕ 는 손가락에 견주어 작아서,
     // 폰에서는 몇 번을 눌러도 안 닫힌다는 말을 들었다. (끌었을 때는 그대로)
-    if (e.type === 'pointerup' && !overUI(e.target) && moved <= TAPSLOP)
+    if (e.type === 'pointerup' && !overUI(e.target) && !overLab(e.target)
+        && moved <= TAPSLOP)
       panel.classList.remove('open');
     pts.delete(e.pointerId);
     try { el.releasePointerCapture(e.pointerId); } catch (_) {}
@@ -3699,7 +3711,7 @@ function updateStopMarks() {
   while (markPool.length < need) {
     const el = document.createElement('div');
     el.className = 'rmark';
-    el.addEventListener('click', ev => {
+    onTap(el, ev => {
       ev.stopPropagation();
       const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
