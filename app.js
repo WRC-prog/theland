@@ -721,14 +721,19 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
             float mk = texture2D(roadT, ru).r;
             // 다가가면 실제 너비대로 좁게, 물러서면 지도처럼 넓게
             float t0 = mix(0.72, 0.15, clamp((d - 12.0) / 110.0, 0.0, 1.0));
-            float rd = smoothstep(t0, t0 + 0.22, mk);
+            float core = smoothstep(t0, t0 + 0.22, mk);
+            float halo = smoothstep(t0 - 0.18, t0 + 0.02, mk);
             // 멀리서는 띠가 대신 그린다 — 겹치지 않게 스러진다
-            rd *= 1.0 - smoothstep(70.0, 150.0, d);
-            // 페인트를 칠하는 것이 아니라 **닳은 땅**이다. 그 자리의 땅빛을
-            // 그대로 안고 다져진 흙 쪽으로 조금 기울일 뿐이다. 색을 통째로
-            // 갈아 버리면 산등성이에 우유를 부은 것처럼 된다.
-            vec3 dust = mix(col, vec3(0.64, 0.56, 0.42), 0.55);
-            col = mix(col, dust, rd * 0.80);
+            float fade = 1.0 - smoothstep(70.0, 150.0, d);
+            // 페인트를 칠하는 것이 아니라 **닳은 땅**이다. 다만 한 가지 빛깔로
+            // 물들이면 밝은 땅에서는 묻혀 버린다(예루살렘 언저리가 그랬다).
+            // 그래서 **밝은 땅에서는 어둡게, 어두운 땅에서는 밝게** 기울인다.
+            float lum = dot(col, vec3(0.30, 0.59, 0.11));
+            vec3 dust = col * mix(1.26, 0.74, smoothstep(0.26, 0.52, lum));
+            dust = mix(dust, vec3(0.58, 0.50, 0.38), 0.28);
+            // 길섶에 옅은 그늘 한 줄 — 어떤 땅빛 위에서도 길이 드러난다
+            col = mix(col, col * 0.82, (halo - core) * 0.70 * fade);
+            col = mix(col, dust, core * 0.88 * fade);
           }
         }
 
@@ -885,6 +890,10 @@ const LABPREV = new Set();
 // 이름 하나가 늘 같은 DOM 조각을 쓰게 한다. 자리 번호로 나눠 주면
 // 차례가 한 칸만 밀려도 글씨가 통째로 갈아 끼워져 튀어 보인다.
 const LABSLOT = new Map();
+// 이름만으로는 모자란다. 「사마리아」는 성읍에도 있고 1세기 지역에도 있어서,
+// 이름을 열쇠로 삼으면 둘이 한 조각을 놓고 판마다 다투었다 — 그것이 곧
+// 미친 듯이 깜빡이던 까닭이다. 등급과 시대까지 붙여 서로 다른 것으로 센다.
+function labKey(s) { return s.ko + '\u0000' + s.rank + '\u0000' + (s.era || ''); }
 // 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
 const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
 
@@ -934,6 +943,18 @@ let highlight = null;
 let moved = 0;                     // 이번에 끈 만큼 — 끌었으면 누른 것이 아니다
 
 function labelCap() { return innerWidth < 560 ? 52 : 130; }
+
+// ── 툴바 크기 ─────────────────────────────────────────────
+//
+// 아이패드로 멀리 놓고 보거나 눈이 침침하면 지금 크기가 작다. 「보통」과
+// 「크게」 둘을 두되, 키운 만큼 높이와 여백이 같이 자라 줄이 흐트러지지
+// 않게 한다 — 글씨만 키우면 단추가 삐뚤빼뚤해진다.
+let UIBIG = false;
+try { UIBIG = localStorage.getItem('theland.uibig') === '1'; } catch (e) {}
+function applyUIBig() {
+  document.body.classList.toggle('uibig', UIBIG);
+  try { localStorage.setItem('theland.uibig', UIBIG ? '1' : '0'); } catch (e) {}
+}
 
 /** 시점으로 서 있을 때, 이 곳이 산에 가려 안 보이는가.
  *  눈에서 그 곳까지 곧게 가면서 땅이 그 선보다 높이 솟는 데가 있으면 가려진 것이다.
@@ -1076,7 +1097,7 @@ function updateLabels() {
     if (v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) continue;
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
     // 떠 있던 이름에게는 좀 더 먼 데까지 자리를 준다 (되돌아올 때는 좁게)
-    const was = LABPREV.has(s.ko);
+    const was = LABPREV.has(labKey(s));
     // 주요 도시는 훨씬 멀리서부터 보인다 — 앱이 그렇다
     const key = s.rank <= 1 && KEYCITY.has(s.ko);
     if (!keep && d > reach * detailMul(s.rank) * (key ? 1.9 : 1) * (was ? 1.22 : 1)) continue;
@@ -1085,8 +1106,10 @@ function updateLabels() {
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
     // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
     const era = !!s.era || s.rank === 9;
+    // 지역 이름은 성읍 이름 위로 한 뼘 띄운다. 「사마리아」처럼 성읍과
+    // 지역이 같은 이름·같은 자리인 곳에서 둘이 포개져 읽을 수가 없었다.
     cand.push({ s, keep: keep, key: key, sx: (v.x * .5 + .5) * innerWidth,
-                sy: (-v.y * .5 + .5) * innerHeight, d,
+                sy: (-v.y * .5 + .5) * innerHeight - (s.era ? 34 : 0), d,
                 score: (keep ? -2000000 : era ? -900000 : key ? -60000 : s.rank * 1000) + d
                        - (was ? 520 : 0) });
   }
@@ -1133,7 +1156,7 @@ function updateLabels() {
   const used = new Array(labelPool.length).fill(false);
   const slot = new Array(out.length).fill(-1);
   for (let i = 0; i < out.length; i++) {
-    const j = LABSLOT.get(out[i].s.ko);
+    const j = LABSLOT.get(labKey(out[i].s));
     if (j != null && j < labelPool.length && !used[j]) { used[j] = true; slot[i] = j; }
   }
   for (let i = 0, free = 0; i < out.length; i++) {
@@ -1143,8 +1166,8 @@ function updateLabels() {
   }
   LABSLOT.clear(); LABPREV.clear();
   for (let i = 0; i < out.length; i++) {
-    LABSLOT.set(out[i].s.ko, slot[i]);
-    LABPREV.add(out[i].s.ko);
+    LABSLOT.set(labKey(out[i].s), slot[i]);
+    LABPREV.add(labKey(out[i].s));
   }
   for (let j = 0; j < labelPool.length; j++) if (!used[j]) labelPool[j].style.display = 'none';
   for (let i = 0; i < out.length; i++) {
@@ -2567,7 +2590,9 @@ function drapeMaterial(color, opacity, lift, through, fade, push, grain, len) {
   const mt = new THREE.ShaderMaterial({
     transparent: true, depthTest: through !== true, depthWrite: false,
     side: THREE.DoubleSide, polygonOffset: true,
-    polygonOffsetFactor: -8, polygonOffsetUnits: -12,
+    // 지형은 판과 판의 이음매를 이기려고 -20 까지 당겨 놓았다. 여기가 -8
+    // 이면 비탈에서 늘 진다 — 다가갈수록 강과 길이 땅에 먹히던 까닭이다.
+    polygonOffsetFactor: -34, polygonOffsetUnits: -16,
     uniforms: {
       hA: { value: hTexA }, bA: { value: hBoundA || new THREE.Vector4(0,0,1,1) },
       hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
@@ -2802,7 +2827,7 @@ function chevronMaterial(lift, period) {
   // 이제 테두리와 갈매기표가 **같은 규칙**을 쓴다.
   const mt = new THREE.ShaderMaterial({
     transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide,
-    polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -12,
+    polygonOffset: true, polygonOffsetFactor: -34, polygonOffsetUnits: -16,
     uniforms: {
       hA: { value: hTexA }, bA: { value: hBoundA || new THREE.Vector4(0,0,1,1) },
       hB: { value: hTexB || hTexA }, bB: { value: hBoundB || hBoundA || new THREE.Vector4(0,0,1,1) },
@@ -3533,6 +3558,7 @@ function earClip(pts) {
 function waterMaterial(color, opacity) {
   return new THREE.ShaderMaterial({
     transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -34, polygonOffsetUnits: -16,
     uniforms: { tint: { value: new THREE.Color(color) },
                 alpha: { value: opacity }, push: { value: 0.03 } },
     vertexShader: [
@@ -3546,6 +3572,119 @@ function waterMaterial(color, opacity) {
       'uniform vec3 tint; uniform float alpha;',
       'void main(){ gl_FragColor = vec4(tint, alpha); }'].join('\n')
   });
+}
+
+// ── 대해의 고래상어 ────────────────────────────────────────
+//
+// 옛 지도에는 바다마다 짐승이 한 마리씩 헤엄쳤다. 대해에도 한 마리 둔다.
+// 고래상어는 물고기 가운데 가장 큰 놈이면서 사람을 해치지 않는다 —
+// 「큰 물고기」라는 말에 이만한 그림도 없다.
+//
+// 지도를 읽는 데 방해가 되면 안 되니, 화면에서는 늘 손톱만 하게 잡히고
+// 아주 가까이 가거나 아주 멀리 물러서면 조용히 사라진다.
+let shark = null, sharkT = 0;
+function sharkTexture() {
+  const W = 660, H = 300, cy = H / 2;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const x0 = 44, x1 = 496;                    // 코끝 ~ 꼬리자루
+  const half = t => 6 + 62 * Math.sin(Math.pow(Math.max(t, 0), 0.58) * Math.PI) * (1 - 0.34 * t);
+  const skin = '#2b4356', spot = 'rgba(232,240,245,.85)';
+
+  // 가슴지느러미 — 넓적하게 뒤로 눕는다
+  g.fillStyle = skin;
+  for (const sgn of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(x0 + 96, cy + sgn * 44);
+    g.quadraticCurveTo(x0 + 150, cy + sgn * 128, x0 + 214, cy + sgn * 132);
+    g.quadraticCurveTo(x0 + 178, cy + sgn * 74, x0 + 168, cy + sgn * 40);
+    g.closePath(); g.fill();
+    // 배지느러미 — 작게
+    g.beginPath();
+    g.moveTo(x0 + 286, cy + sgn * 32);
+    g.quadraticCurveTo(x0 + 320, cy + sgn * 80, x0 + 358, cy + sgn * 78);
+    g.quadraticCurveTo(x0 + 334, cy + sgn * 48, x0 + 330, cy + sgn * 28);
+    g.closePath(); g.fill();
+  }
+  // 몸통
+  g.beginPath();
+  for (let i = 0; i <= 40; i++) { const t = i / 40; const x = x0 + (x1 - x0) * t;
+    if (i) g.lineTo(x, cy - half(t)); else g.moveTo(x, cy - half(t)); }
+  for (let i = 40; i >= 0; i--) { const t = i / 40; g.lineTo(x0 + (x1 - x0) * t, cy + half(t)); }
+  g.closePath(); g.fill();
+  // 꼬리 — 위쪽 날이 긴 초승달
+  g.beginPath();
+  g.moveTo(x1 - 6, cy - 12); g.lineTo(x1 - 6, cy + 12);
+  g.quadraticCurveTo(W - 78, cy + 66, W - 32, cy + 88);
+  g.quadraticCurveTo(W - 66, cy + 18, W - 60, cy);
+  g.quadraticCurveTo(W - 66, cy - 24, W - 18, cy - 128);
+  g.quadraticCurveTo(W - 80, cy - 74, x1 - 6, cy - 12);
+  g.closePath(); g.fill();
+  // 등지느러미 두 개 (위에서 보면 등마루에 얹힌 삼각형)
+  g.fillStyle = '#22374a';
+  for (const [bx, bw, bh] of [[x0 + 232, 74, 40], [x0 + 356, 40, 22]]) {
+    g.beginPath(); g.moveTo(bx, cy - 4); g.lineTo(bx + bw, cy - 2);
+    g.lineTo(bx + bw * 0.34, cy - bh); g.closePath(); g.fill();
+  }
+  // 흰 점무늬 — 고래상어를 고래상어로 알아보게 하는 것
+  g.fillStyle = spot;
+  for (let i = 0; i < 14; i++) {
+    const t = 0.10 + i * 0.062;
+    const hw = half(t);
+    for (let k = -3; k <= 3; k++) {
+      if (Math.abs(k) * 26 > hw - 8) continue;
+      const x = x0 + (x1 - x0) * t + ((i % 2) ? 7 : 0);
+      const y = cy + k * (hw / 3.4);
+      g.beginPath(); g.arc(x, y, 4.1, 0, 6.284); g.fill();
+    }
+  }
+  // 눈 — 넓적한 머리 양옆
+  g.fillStyle = '#0d1a24';
+  g.beginPath(); g.arc(x0 + 26, cy - half(0.06) + 5, 5, 0, 6.284); g.fill();
+  g.beginPath(); g.arc(x0 + 26, cy + half(0.06) - 5, 5, 0, 6.284); g.fill();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return tex;
+}
+
+function addShark() {
+  if (shark) return;
+  const g = new THREE.PlaneBufferGeometry(1, 300 / 660);
+  g.rotateX(-Math.PI / 2);
+  const m = new THREE.MeshBasicMaterial({ map: sharkTexture(), transparent: true,
+    opacity: 0.9, depthWrite: false, side: THREE.DoubleSide });
+  shark = new THREE.Mesh(g, m);
+  shark.renderOrder = 3;
+  shark.frustumCulled = false;
+  scene.add(shark);
+}
+
+/** 천천히 한 바퀴 돈다 — 대해 한복판을 오 분에 한 바퀴쯤 */
+function swimShark(dt) {
+  if (!shark) return;
+  sharkT += dt;
+  const a = sharkT / 300 * Math.PI * 2;                 // 오 분에 한 바퀴
+  const lat = 32.70 + 0.42 * Math.sin(a) + 0.06 * Math.sin(a * 3.1);
+  const lon = 33.45 + 0.95 * Math.cos(a);
+  const x = worldX(lon), z = worldZ(lat);
+  // 나아가는 쪽으로 머리를 둔다
+  const a2 = a + 0.02;
+  const dx = worldX(33.45 + 0.95 * Math.cos(a2)) - x;
+  const dz = worldZ(32.70 + 0.42 * Math.sin(a2) + 0.06 * Math.sin(a2 * 3.1)) - z;
+  shark.position.set(x, 0.03, z);
+  shark.rotation.y = Math.atan2(-dz, dx);
+  // 화면에서 늘 비슷한 크기로
+  const dd = Math.max(1, camera.position.distanceTo(shark.position));
+  const k = 2 * Math.tan(camera.fov * Math.PI / 360);
+  const sc = Math.max(0.4, dd * k * 0.055);
+  shark.scale.set(sc, sc, sc);
+  // 너무 가까우면 물러나고 너무 멀면 사라진다
+  const near = Math.min(1, Math.max(0, (cam.dist - 7) / 10));
+  const far = 1 - Math.min(1, Math.max(0, (cam.dist - 700) / 350));
+  shark.material.opacity = 0.9 * near * far;
+  shark.visible = shark.material.opacity > 0.02;
 }
 
 function addLakes() {
@@ -3580,7 +3719,7 @@ function addRivers() {
     // 다만 큰 강보다는 옅게 두어 구별이 되게 한다.
     const dry = (r.ko || '').indexOf('급류') >= 0 || (r.ko || '').indexOf('와디') >= 0;
     drapeRuns(riverMesh, pts, Math.max(wide, dry ? 0.45 : 0.55),
-              dry ? 0x4d87a6 : 0x2f6f95, 0.010,
+              dry ? 0x4d87a6 : 0x2f6f95, 0.022,
               { opacity: dry ? 0.55 : 0.8, order: 4, fade: true });
   }
   // 가나안 바깥의 큰 강 — 나일·유프라테스·티그리스·오론테스·할리스…
@@ -3702,10 +3841,14 @@ cardCSS.textContent =
     '.cgap{display:none}' +
     '#card>button{flex:0 0 auto}' +
   '}' +
-  '#cX,#cMinus{border:0;background:none;color:rgba(255,255,255,.6);font:14px/1 inherit;' +
-  'cursor:pointer;width:26px;height:26px;border-radius:13px}' +
-  '#cX:hover,#cMinus:hover{background:rgba(255,255,255,.1)}' +
-  '#cMinus{color:#ff8f70;font-size:17px}' +
+  // 닫기·빼기는 손가락으로 눌러야 하는 것이다. 26px 짜리 회색 십자가는
+  // 보이지도 않고 눌리지도 않았다.
+  '#cX,#cMinus{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);' +
+  'color:rgba(255,255,255,.9);font:400 19px/1 inherit;' +
+  'cursor:pointer;width:36px;height:36px;border-radius:18px;flex:0 0 auto;' +
+  'display:inline-flex;align-items:center;justify-content:center}' +
+  '#cX:hover,#cMinus:hover{background:rgba(255,255,255,.18)}' +
+  '#cMinus{color:#ff9d80;font-size:22px;border-color:rgba(255,140,110,.35)}' +
   '@media (max-width:560px){#card{left:8px;right:8px;transform:translateY(120%);max-width:none;width:auto}' +
   '#card.on{transform:none}.cslot{padding:0 9px}}';
 document.head.appendChild(cardCSS);
@@ -3722,6 +3865,16 @@ function openLayers() {
   let html = '<div class="note" style="border:0;padding-bottom:2px">' +
     escapeHTML(L.s('갈래를 눌러 켜고 끕니다. 켜면 그 아래에서 얼마나 자세히 볼지 고를 수 있습니다.',
                    'Tap a layer to turn it on or off. When it is on, choose how much detail below it.')) +
+    '</div>' +
+    '<div class="lrow on" style="cursor:default"><i>\u25cf</i><span><b>' +
+      escapeHTML(L.s('툴바 크기', 'Toolbar size')) + '</b>' +
+      escapeHTML(L.s('단추와 글씨를 한 단계 크게 볼 수 있습니다',
+                     'Make the buttons and text one step larger')) + '</span></div>' +
+    '<div class="dpick">' +
+      '<button data-ui="0"' + (UIBIG ? '' : ' class="sel"') + '>' +
+      escapeHTML(L.s('보통', 'Normal')) + '</button>' +
+      '<button data-ui="1"' + (UIBIG ? ' class="sel"' : '') + '>' +
+      escapeHTML(L.s('크게', 'Large')) + '</button>' +
     '</div>';
 
   html += LAYERS.map(l => {
@@ -4056,6 +4209,12 @@ onTap(document.getElementById('pb'), ev => {
       Math.round(km) + L.s(' km · ' + p.stops.length + '곳', ' km · ' + p.stops.length + ' stops');
     return;
   }
+  const ub = ev.target.closest('[data-ui]');
+  if (ub) {
+    UIBIG = ub.dataset.ui === '1';
+    applyUIBig(); openLayers(); updateLabels();
+    return;
+  }
   const dp = ev.target.closest('[data-detail]');
   if (dp) {
     const lay = dp.parentNode && dp.parentNode.dataset.lay;
@@ -4149,6 +4308,51 @@ labSizeCSS.textContent =
   '.lab.mark em{min-width:18px;height:18px;font-size:11px}}';
 document.head.appendChild(labSizeCSS);
 
+// ── 툴바 「크게」 ──────────────────────────────────────────
+//
+// 글씨만 키우면 단추 높이가 제각각이 되어 줄이 삐뚤어진다. 높이·여백·
+// 아이콘을 **함께** 키워 한 줄로 나란히 서게 한다.
+const uiBigCSS = document.createElement('style');
+uiBigCSS.textContent =
+  'body.uibig #tools .btn{padding:12px 15px;gap:7px}' +
+  'body.uibig #tools .btn u{font-size:15px}' +
+  'body.uibig #tools .btn u.big{font-size:17px}' +
+  'body.uibig #tools .btn i svg{width:20px;height:20px}' +
+  'body.uibig #tools .btn i.txt{font-size:14px}' +
+  'body.uibig #q{font-size:16.5px;padding:13px 14px}' +
+  'body.uibig #qico{width:18px;height:18px;margin-left:14px}' +
+  'body.uibig #hud b{font-size:16px}' +
+  'body.uibig #hud{padding:11px 14px}' +
+  'body.uibig #qualPick{padding:4px 5px 4px 12px}' +
+  'body.uibig #qualPick>i{font-size:14px}' +
+  'body.uibig #qualPick button{height:38px;padding:0 13px;font-size:14px}' +
+  'body.uibig #live{height:46px;padding:0 16px;gap:9px}' +
+  'body.uibig #live svg{width:16px;height:16px}' +
+  'body.uibig #live b{font-size:18px}' +
+  'body.uibig #live .dot{width:11px;height:11px;border-radius:6px}' +
+  'body.uibig #card{padding:12px 16px;gap:8px}' +
+  'body.uibig #cName b{font-size:16.5px}' +
+  'body.uibig .cslot{font-size:14px;height:40px;padding:0 14px}' +
+  'body.uibig #cX,body.uibig #cMinus{width:42px;height:42px;font-size:22px}' +
+  'body.uibig #cMinus{font-size:25px}' +
+  'body.uibig #goBtn,body.uibig #clrBtn,body.uibig #mkClrBtn{' +
+  'height:50px;padding:0 19px;font-size:15px;border-radius:25px}' +
+  'body.uibig #spdBtn{padding:4px 5px 4px 13px}' +
+  'body.uibig #spdBtn>i,body.uibig #travel>i,body.uibig #eyeh>i{font-size:13.5px}' +
+  'body.uibig #spdBtn button,body.uibig #travel button,body.uibig #eyeh button{' +
+  'height:38px;padding:0 13px;font-size:14px;border-radius:19px}' +
+  'body.uibig #eyeh>u{font-size:13px}' +
+  'body.uibig #joy{width:132px;height:132px;border-radius:66px}' +
+  'body.uibig #joy i{width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:26px}' +
+  '@media (max-width:560px){' +
+    'body.uibig #tools .btn{padding:11px 12px}' +
+    'body.uibig #qualPick button{height:34px;padding:0 10px;font-size:13px}' +
+    'body.uibig #goBtn,body.uibig #clrBtn,body.uibig #mkClrBtn{height:46px;font-size:14px}' +
+    'body.uibig #joy{width:112px;height:112px}' +
+  '}';
+document.head.appendChild(uiBigCSS);
+applyUIBig();
+
 /** 화면 아래에 잠깐 뜨는 알림 */
 function toast(text) {
   const el = document.createElement('div');
@@ -4228,6 +4432,7 @@ let fpvT = 0;
 function tick() {
   requestAnimationFrame(tick);
   syncDrapeDepth();
+  swimShark(1 / 60);
   stepKeys();
   if (fpv) { const n = performance.now(); stepFpv(fpvT ? Math.min(120, n - fpvT) : 16); fpvT = n; }
   else fpvT = 0;
@@ -4259,6 +4464,7 @@ function tick() {
     const canaanClip = tileRect(canaan, SEAM_KM);
 
     addLakes();
+    addShark();
     syncAreas();
     bindControls();
     addViewButtons();
