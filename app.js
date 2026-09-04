@@ -3525,6 +3525,7 @@ let runnerEl = null;
 // 눈금은 **곱셈으로** 늘어나므로 왼쪽은 촘촘하고 오른쪽은 성큼성큼 뛴다.
 // 처음 자리는 게이지의 5 % — 예전의 ×1 과 같은 빠르기다.
 const SPD_MIN = 0.75, SPD_MAX = 200;
+const FOLLOW_BASE = 3.0;           // ×1 일 때 길 위를 초속 3 km 로 간다
 let spdP = 0.05;
 try {
   const v = parseFloat(localStorage.getItem('theland.spd'));
@@ -3846,9 +3847,14 @@ function stepFollow() {
   // 화면이 초당 두 장씩 지나갔다 — ×0.5 로 줄여도 화면 한 장이다.
   // 이제 **보는 거리**로 상한을 둔다. 한 초에 화면 삼분의 일쯤 —
   // 그 안에서 긴 길은 빠르게, 짧은 길은 느긋하게 간다.
-  // 보는 거리는 셈에 넣지 않는다. 확대했다고 굼떠지고 축소했다고 빨라지면
-  // 게이지를 잡아 놓은 뜻이 없다 — 어디서 보든 같은 빠르기다.
-  followKm += dt * Math.max(1.2, followTotal / 90) * spdMul();
+  // 길이도 보는 거리도 셈에 넣지 않는다.
+  //
+  // 예전에는 「길이가 얼마든 한 분 반쯤에 다 걷도록」 잡혀 있었다. 그래서
+  // 바울의 전 여정처럼 만 킬로미터에 가까운 길에서는 게이지를 맨 왼쪽까지
+  // 내려도 한 초에 백 킬로미터씩 흘렀다 — 게이지가 아무 뜻이 없었다.
+  // 이제 밑바탕은 초속 3 km 하나로 두고, **게이지가 곱하는 몫이 곧
+  // 빠르기다.** 긴 길은 게이지를 올려서 넘긴다.
+  followKm += dt * FOLLOW_BASE * spdMul();
   if (followKm >= followTotal) { followKm = followTotal; following = false; }
 
   const p = followAt(followKm);
