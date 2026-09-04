@@ -2452,12 +2452,23 @@ function levantMoist(la, lo, e) {
   let m = 0.12 + 0.88 * sstepJS((la - 30.45) / (33.30 - 30.45));
   m += 0.22 * sstepJS((e - 150) / 750);
   const ws = watershedLonJS(la), rift = riftLonJS(la);
+  // 비그늘의 세기는 **위도를 탄다.**
+  //
+  //   · 유다·사마리아(31~32.3°) — 마루가 높고 그 너머가 사해(-400 m)라
+  //     비가 거의 넘어오지 못한다. 유다 광야가 여기서 생긴다.
+  //   · 갈릴리·골란(32.6° 위) — 마루가 낮아지고 바다가 가까워 비그늘이
+  //     훨씬 얕다. 상부 갈릴리는 오히려 이 땅에서 비가 가장 많은 곳이다.
+  //
+  // 한 값(0.95)을 위도와 무관하게 쓰던 것이 하솔·게네사렛·골란을 사막으로
+  // 만들었다. 남쪽 값은 그대로 두고 북쪽만 얕게 한다.
+  const shade = 0.95 - 0.60 * sstepJS((la - 32.30) / 0.90);
+  const eastDry = 0.90 - 0.55 * sstepJS((la - 32.30) / 0.90);
   if (lo > ws && lo < rift) {
-    m -= 0.95 * sstepJS((lo - ws) / Math.max(rift - ws, 0.05));
+    m -= shade * sstepJS((lo - ws) / Math.max(rift - ws, 0.05));
   } else if (lo >= rift) {
     const east = sstepJS((lo - rift) / 0.45);
     const plateau = 0.20 + 0.60 * sstepJS((la - 30.9) / (32.6 - 30.9));
-    const dry = m - 0.9;
+    const dry = m - eastDry;
     m = dry + (plateau - dry) * east;
   }
   if (e < 0) m -= 0.35 * sstepJS(-e / 350);
