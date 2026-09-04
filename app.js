@@ -671,6 +671,21 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
                    min(smoothstep(0.0, 1.0, (la - 30.20) / g),
                        smoothstep(0.0, 1.0, (33.60 - la) / g)));
       }
+      // 네게브에서 술 광야로 이어지는 마른 땅.
+      //
+      // 위의 손질은 가나안 판 **안쪽으로** 스러진다. 그래서 브엘-세바 아래
+      // 서쪽 — 네게브에서 술로 건너가는 띠 — 에는 거의 닿지 않았고,
+      // 그 자리는 높이만으로 칠해져 200~400 m 짜리 사막이 초록으로 남았다.
+      // 그 띠만 따로 모래빛으로 눕힌다.
+      //
+      // 네 변을 넉넉히 스러지게 잡아, 시나이 산지도 나일 어귀도 에돔의
+      // 산지도 건드리지 않는다 — 딱 그 띠만이다.
+      float shurAt(float la, float lo){
+        return (1.0 - smoothstep(31.10, 31.62, la))    // 브엘-세바 아래부터
+             * smoothstep(29.25, 29.95, la)            // 시나이 산지 앞에서 멎고
+             * smoothstep(32.35, 33.10, lo)            // 나일 어귀는 남기고
+             * (1.0 - smoothstep(34.95, 35.35, lo));   // 에돔 앞에서 멎는다
+      }
       vec3 ramp(float h, bool wet){
         if (wet)       return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
         if (h < 0.0)   return mix(vec3(0.44,0.41,0.27), vec3(0.35,0.46,0.26), clamp(h/-450.0+1.0,0.0,1.0));
@@ -761,6 +776,10 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
           col = mix(col, vec3(0.63, 0.56, 0.41), dry * 0.85);
           col = mix(col, vec3(0.34, 0.44, 0.24), grn * 0.80);
           col = mix(col, vec3(0.74, 0.66, 0.50), neg * 0.55);
+          // 네게브 ~ 술 — 낮은 데는 모래빛, 높은 데는 마른 바위빛
+          vec3 sand = mix(vec3(0.80, 0.73, 0.56), vec3(0.68, 0.60, 0.46),
+                          clamp((h - 150.0) / 750.0, 0.0, 1.0));
+          col = mix(col, sand, shurAt(la, lo) * 0.72);
         }
 
         // ── 땅에 새긴 길 ─────────────────────────────────────
