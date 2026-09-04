@@ -1291,9 +1291,15 @@ function updateLabels() {
 
 /** 성구를 누르면 그 대목이 열리게 — 앱과 같은 주소를 쓴다 */
 function verseURL(ref) {
-  const first = String(ref).split(';')[0].trim();
-  if (!first) return null;
-  const q = encodeURIComponent(L.ref(first));
+  // 근거 성구가 둘 이상이면 **다 함께** 연다.
+  //
+  // 예전에는 세미콜론 앞의 첫 성구만 보냈다. 그래서
+  // 「민수기 13:1-3,17-20; 신명기 1:19-23」 을 눌러도 신명기는 열리지 않았다.
+  // 뒤엣것은 아예 찾아 주지 않으니, 있는 줄도 모르고 지나쳤다.
+  // 세미콜론 뒤의 빈칸은 지우고 목록 그대로 넘긴다.
+  const all = String(ref).split(';').map(t => t.trim()).filter(Boolean).join(';');
+  if (!all) return null;
+  const q = encodeURIComponent(L.ref(all));
   const path = L.cur === 'en' ? 'en/wol/l/r1/lp-e' : 'ko/wol/l/r8/lp-ko';
   return 'https://wol.jw.org/' + path + '?q=' + q;
 }
@@ -1434,12 +1440,24 @@ function makeJoy() {
     'font:700 12px/1 inherit;padding:0 9px;height:30px;border-radius:15px}' +
     '#travel button.sel,#eyeh button.sel{background:#f2b64c;color:#231702}' +
     '@media (max-width:560px){#joy{width:96px;height:96px}' +
-    '#travel button,#eyeh button{padding:0 7px;font-size:11px;height:28px}}';
+    '#travel button,#eyeh button{padding:0 7px;font-size:11px;height:28px}}' +
+    // 넓은 화면에서는 조종 단추를 화면 한복판에서 치운다.
+    //
+    // 경로를 만들어 두고 시점을 켜면 걸음 · 눈높이 · 빠르기 · 따라가기 ·
+    // 조이스틱이 **다섯 줄로 가운데에 쌓여** 정작 걸어갈 앞이 보이지 않았다.
+    // (아이패드 가로에서 특히 그렇다.) 조종은 왼쪽 아래에 세로로 모으고
+    // 조이스틱은 오른쪽 아래로 보낸다 — 가운데는 비워 둔다.
+    '@media (min-width:700px){' +
+    'body.fpv #travel,body.fpv #eyeh,body.fpv #spdBtn{position:fixed;left:14px;z-index:27}' +
+    'body.fpv #spdBtn{bottom:14px}body.fpv #eyeh{bottom:60px}body.fpv #travel{bottom:106px}' +
+    'body.uibig.fpv #eyeh{bottom:68px}body.uibig.fpv #travel{bottom:122px}' +
+    'body.fpv #joy{position:fixed;right:18px;bottom:64px;z-index:27}}';
   document.head.appendChild(st);
   syncTravel();
 }
 
 function syncTravel() {
+  document.body.classList.toggle('fpv', !!fpv);
   if (!travelEl) return;
   travelEl.className = fpv ? 'on' : '';
   travelEl.innerHTML = '<i>' + escapeHTML(L.s('걸음', 'Pace')) + '</i>' +
