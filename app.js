@@ -992,6 +992,13 @@ function updateLabels() {
   const v = new THREE.Vector3();
   const cand = [];
   const camPos = camera.position;
+  // 얼마나 멀리까지 이름을 띄울 것인가.
+  //   · 물러설수록 멀리까지 — 보는 거리에 비례한다.
+  //   · 다만 눈을 낮게 깔면 수십 km 가 지평선 한 줄로 눌려 붙는다. 거기까지
+  //     이름을 다 띄우면 글자 띠가 되어 지도가 아니라 낱말 더미가 된다.
+  //     그래서 눕혀 볼수록 짧게 끊는다.
+  const tilt = Math.max(0, Math.min(1, (cam.el - 0.12) / 0.55));   // 0 눕힘 · 1 내려다봄
+  const reach = (cam.dist * 2.6 + 50) * (0.55 + 0.45 * tilt);
   for (const s of SITES) {
     if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
     if (s.rank === 10 && cam.dist > 12) continue;        // 성 안의 것은 가까이서만
@@ -1011,7 +1018,7 @@ function updateLabels() {
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
     // 떠 있던 이름에게는 좀 더 먼 데까지 자리를 준다 (되돌아올 때는 좁게)
     const was = LABPREV.has(s.ko);
-    if (!keep && d > (cam.dist * 3.2 + 60) * detailMul(s.rank) * (was ? 1.22 : 1)) continue;
+    if (!keep && d > reach * detailMul(s.rank) * (was ? 1.22 : 1)) continue;
     if (fpv && !s.era && hiddenByLand(s, camPos, was)) continue;
     // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
@@ -1024,16 +1031,30 @@ function updateLabels() {
   }
   cand.sort((a, b) => a.score - b.score);
 
-  // 겹침 정리 — 화면을 칸으로 나눠 한 칸에 하나만
+  // 겹침 정리 — 화면을 칸으로 나눠 한 칸에 하나만.
+  //
+  // 다만 칸 하나에 하나씩만으로는 지평선 언저리가 여전히 다닥다닥하다.
+  // 저 멀리서는 수십 km 가 몇십 픽셀로 눌리기 때문이다. 그래서 **멀리 있는
+  // 이름일수록 넓은 자리를 차지하게** 한다 — 가까운 데는 그대로 촘촘하고,
+  // 먼 데만 성기게 솎인다.
   const cell = 34, cols = Math.ceil(innerWidth / cell);
   const taken = new Set();
   const out = [];
+  const near = Math.max(cam.dist, 1);
   for (const c of cand) {
     // 골라 둔 곳은 한도에도 자리다툼에도 걸리지 않는다
     if (!c.keep && out.length >= labelCap()) continue;
-    const k = Math.floor(c.sy / cell) * cols + Math.floor(c.sx / cell);
-    if (!c.keep && taken.has(k)) continue;
-    taken.add(k); out.push(c);
+    const far = c.d / near;                       // 보는 거리의 몇 곱쯤 멀리 있는가
+    const sp = c.keep ? 1 : (far > 2.5 ? 3 : far > 1.5 ? 2 : 1);
+    const cx = Math.floor(c.sx / cell), cy = Math.floor(c.sy / cell);
+    let hit = false;
+    for (let a = 0; a < sp && !hit; a++)
+      for (let b = 0; b < sp && !hit; b++)
+        if (taken.has((cy + b) * cols + (cx + a))) hit = true;
+    if (!c.keep && hit) continue;
+    for (let a = 0; a < sp; a++)
+      for (let b = 0; b < sp; b++) taken.add((cy + b) * cols + (cx + a));
+    out.push(c);
   }
 
   while (labelPool.length < out.length) {
