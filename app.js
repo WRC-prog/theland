@@ -230,9 +230,47 @@ async function loadAll() {
       den: 'The first, second and third journeys and the voyage to Rome, in one line' }
   ];
   for (const l of LANES) LANEMAP.set(l.a + '\u0000' + l.b, l.via);
+  // 이집트로 피한 길. 「이집트」는 나라 전체를 가리키는 표지라 상이집트에
+  // 찍혀 있어서, 곧게 이으면 아스글론 앞바다를 가로질러 버렸다. 뭍길로
+  // 돌려 준다 — 블레셋 사람들의 땅으로 가는 길을 따라 나일 어귀로.
+  for (const l of [
+    { a: '예루살렘', b: '이집트',
+      via: [[31.50,34.47],[31.29,34.25],[31.13,33.80],[31.06,32.90],[31.04,32.55],
+            [30.98,31.88],[30.40,31.40],[30.13,31.29],[29.30,31.02],[28.30,30.72]] },
+    { a: '이집트', b: '나사렛',
+      via: [[28.30,30.72],[29.30,31.02],[30.13,31.29],[30.40,31.40],[30.98,31.88],
+            [31.04,32.55],[31.06,32.90],[31.13,33.80],[31.29,34.25],[31.50,34.47],
+            [31.80,34.65],[32.20,34.90],[32.50,35.12]] }
+  ]) if (!LANEMAP.has(l.a + '\u0000' + l.b)) LANEMAP.set(l.a + '\u0000' + l.b, l.via);
   I18N = i18n; TERRAIN = terrain;
   REGIONS = terrain.regions || [];
   ROADS = unpack(roads); PRESETS = unpack(presets); WAYS = unpack(ways);
+
+  // 시나이를 건너던 두 옛길. 자료에는 가나안 안쪽 길만 담겨 있어서,
+  // 이집트로 오르내리던 길이 통째로 비어 있었다.
+  //   · 블레셋 사람들의 땅으로 가는 길 — 나일 어귀에서 해안을 따라 가자까지.
+  //     가장 짧고 가장 붐비던 길이다.
+  //   · 술로 가는 길 — 이집트 어귀에서 술을 지나 아스몬·가데스로.
+  // 바르다윌 못은 물이라 길을 그 남쪽 뭍으로 지나가게 잡았다.
+  for (const r of [
+    { ko: '블레셋 사람들의 땅으로 가는 길', rank: 0,
+      pts: [[30.98,31.88],[31.02,32.20],[31.04,32.55],[31.06,32.90],[31.05,33.25],
+            [31.07,33.55],[31.13,33.80],[31.20,34.05],[31.29,34.25],[31.40,34.38],
+            [31.502,34.466]] },
+    { ko: '술로 가는 길', rank: 1,
+      pts: [[30.40,32.45],[30.52,32.62],[30.62,32.78],[30.72,32.90],[30.70,33.30],
+            [30.66,33.70],[30.62,34.05],[30.60,34.42],[30.575,34.477]] }
+  ]) if (!ROADS.some(x => x.ko === r.ko)) ROADS.push(r);
+
+  // 이집트 급류 골짜기 — 약속의 땅 남서쪽 경계. 시나이 한복판에서 북으로
+  // 흘러 대해로 든다. 골짜기 바닥은 높이 자료에서 그대로 짚어 냈다.
+  for (const w of [
+    { ko: '이집트 급류 골짜기', widthM: 90,
+      pts: [[31.13,33.80],[31.05,33.65],[30.97,33.51],[30.89,33.55],[30.81,33.68],
+            [30.73,33.74],[30.65,33.73],[30.57,33.75],[30.49,33.79],[30.41,33.83],
+            [30.33,33.94],[30.25,34.02],[30.17,33.99],[30.09,33.89],[30.01,33.82],
+            [29.93,33.79],[29.85,33.71],[29.77,33.62],[29.69,33.60],[29.63,33.55]] }
+  ]) if (!WAYS.some(x => x.ko === w.ko)) WAYS.push(w);
   AREAS = areas || { tribes: [], nations: [] };
   I18N = i18n;
   BOOKS_BY_LEN = Object.entries(i18n.book).sort((a, b) => b[0].length - a[0].length);
@@ -282,7 +320,7 @@ async function loadAll() {
   // 예수 그리스도의 발자취. 복음서에 적힌 대로 들른 곳을 차례로 이었다.
   // (지명은 이미 지도에 있는 것만 쓴다 — 없는 곳을 지어내지 않는다)
   const JESUS = [
-    { ko: '예수 ① 나심과 어린 시절', en: 'Jesus ① Birth and childhood',
+    { ko: '예수 ① 출생과 어린 시절', en: 'Jesus ① Birth and childhood',
       dko: '나사렛에서 베들레헴으로, 이집트로 피했다가 다시 나사렛으로',
       den: 'Nazareth to Bethlehem, into Egypt, and back to Nazareth',
       stops: ['나사렛', '베들레헴', '예루살렘', '이집트', '나사렛'] },
@@ -321,7 +359,7 @@ async function loadAll() {
       for (const p of parts)
         for (const st of p.stops) { if (stops[stops.length - 1] === st) continue; stops.push(st); }
       PRESETS.push({ ko: '예수 — 전 여정', en: 'Jesus — every journey',
-                     detailKo: '나심에서 마지막 유월절까지 한 줄로',
+                     detailKo: '출생에서 마지막 유월절까지 한 줄로',
                      detailEn: 'From his birth to the last Passover, in one line',
                      stops: stops, followTerrain: 1 });
     }
@@ -671,21 +709,6 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
                    min(smoothstep(0.0, 1.0, (la - 30.20) / g),
                        smoothstep(0.0, 1.0, (33.60 - la) / g)));
       }
-      // 네게브에서 술 광야로 이어지는 마른 땅.
-      //
-      // 위의 손질은 가나안 판 **안쪽으로** 스러진다. 그래서 브엘-세바 아래
-      // 서쪽 — 네게브에서 술로 건너가는 띠 — 에는 거의 닿지 않았고,
-      // 그 자리는 높이만으로 칠해져 200~400 m 짜리 사막이 초록으로 남았다.
-      // 그 띠만 따로 모래빛으로 눕힌다.
-      //
-      // 네 변을 넉넉히 스러지게 잡아, 시나이 산지도 나일 어귀도 에돔의
-      // 산지도 건드리지 않는다 — 딱 그 띠만이다.
-      float shurAt(float la, float lo){
-        return (1.0 - smoothstep(31.10, 31.62, la))    // 브엘-세바 아래부터
-             * smoothstep(29.25, 29.95, la)            // 시나이 산지 앞에서 멎고
-             * smoothstep(32.35, 33.10, lo)            // 나일 어귀는 남기고
-             * (1.0 - smoothstep(34.95, 35.35, lo));   // 에돔 앞에서 멎는다
-      }
       vec3 ramp(float h, bool wet){
         if (wet)       return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
         if (h < 0.0)   return mix(vec3(0.44,0.41,0.27), vec3(0.35,0.46,0.26), clamp(h/-450.0+1.0,0.0,1.0));
@@ -776,10 +799,6 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
           col = mix(col, vec3(0.63, 0.56, 0.41), dry * 0.85);
           col = mix(col, vec3(0.34, 0.44, 0.24), grn * 0.80);
           col = mix(col, vec3(0.74, 0.66, 0.50), neg * 0.55);
-          // 네게브 ~ 술 — 낮은 데는 모래빛, 높은 데는 마른 바위빛
-          vec3 sand = mix(vec3(0.80, 0.73, 0.56), vec3(0.68, 0.60, 0.46),
-                          clamp((h - 150.0) / 750.0, 0.0, 1.0));
-          col = mix(col, sand, shurAt(la, lo) * 0.72);
         }
 
         // ── 땅에 새긴 길 ─────────────────────────────────────
