@@ -1239,7 +1239,7 @@ function updateLabels() {
     el.addEventListener('click', ev => {
       ev.stopPropagation();
       if (moved > 3) return;                 // 지도를 끌다가 뗀 것뿐이다
-      const s = el._site; if (s) { flyTo(s); showCard(s); }
+      const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
     labelRoot.appendChild(el); labelPool.push(el);
   }
@@ -1571,13 +1571,16 @@ function panBy(dx, dy, dist) {
  *  (dist 를 딱 집어 준 때만 따른다) */
 let flyAnim = null, flyT = 0;
 
-function flyTo(s, dist) {
+function flyTo(s, dist, now) {
   highlight = s.ko;
   const d1 = dist || cam.dist;
   const km = Math.hypot(s.x - cam.tx, s.z - cam.tz);
-  // 시점으로 걷는 중이거나 코앞이면 그냥 옮긴다.
-  // 짧은 거리에 애니메이션을 걸면 굼떠 보이기만 한다.
-  if (fpv || (km < 0.8 && Math.abs(d1 - cam.dist) < 0.8)) {
+  // 그냥 옮기는 자리 셋.
+  //   · 지도 위의 이름을 **손으로 곧장 찍은** 때 — 이미 눈에 보이는 곳이라
+  //     날아갈 것이 없다. 찍은 자리가 스르르 밀려나면 되레 성가시다.
+  //   · 시점으로 걷는 중
+  //   · 코앞 — 짧은 거리에 애니메이션을 걸면 굼떠 보이기만 한다
+  if (now || fpv || (km < 0.8 && Math.abs(d1 - cam.dist) < 0.8)) {
     stopFly();
     cam.tx = s.x; cam.tz = s.z; cam.dist = d1;
     applyCam();
@@ -3367,7 +3370,7 @@ function updateStopMarks() {
     el.className = 'rmark';
     el.addEventListener('click', ev => {
       ev.stopPropagation();
-      const s = el._site; if (s) { flyTo(s); showCard(s); }
+      const s = el._site; if (s) { flyTo(s, 0, true); showCard(s); }
     });
     labelRoot.appendChild(el);
     markPool.push(el);
