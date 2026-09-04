@@ -949,6 +949,935 @@ function updateDetail() {
   setBaseClip(detailWin);
 }
 
+// ── 예루살렘 ──────────────────────────────────────────────
+//
+// 앱의 예루살렘 모형을 그대로 옮겼다. 성전 지역을 원점으로 하는 국소
+// 좌표(미터, x = 동, z = 남, y = 위)에서 상자를 쌓은 뒤, 뿌리 하나를
+// 세계 눈금(1 단위 = 1 km)에 올려 놓는다.
+//
+// 규격은 열왕기상 6–7장 (한 규빗 = 0.445 m)
+//   · 본채 60 × 20 규빗, 높이 30 규빗
+//   · 곁방 3층, 벽에서 5 · 6 · 7 규빗
+//   · 현관 20 × 10 규빗
+//   · 야긴과 보아스 — 기둥 18 규빗, 기둥머리 5 규빗
+//   · 구리 제단 20 × 20 규빗, 높이 10 규빗
+//   · 주조한 바다 지름 10 규빗, 소 열두 마리 위 · 운반대 열 개
+//
+// 건물 높이는 **부풀리지 않는다.** 지형은 네 배로 늘여 그리지만 건물까지
+// 늘이면 성벽이 이쑤시개처럼 얇아진다(앱도 같은 까닭으로 1.0 이다).
+// 다만 땅 높이를 읽을 때는 네 배를 그대로 먹여, 늘어난 비탈에 건물이
+// 제대로 붙게 한다. 그만큼 이웃한 토막끼리 높이 차가 벌어지므로
+// 기초는 앱보다 깊이 내린다.
+
+const JCUB = 0.445;
+function cbt(n) { return n * JCUB; }
+const JERU = { lat: 31.77800, lon: 35.23540 };
+const JM_LAT = KM_LAT * 1000, JM_LON = KM_LON * 1000;
+
+/** 국소 x(동쪽 m) · z(남쪽 m) → 위도·경도 */
+function jgeo(x, z) {
+  return { lat: JERU.lat - z / JM_LAT, lon: JERU.lon + x / JM_LON };
+}
+
+// 예루살렘 언저리만 지형 그림에서 **원본 눈금 그대로** 한 번 읽어 둔다.
+// 이름표가 쓰는 눈금(190 m)으로는 기드론·힌놈 골짜기가 뭉개져,
+// 성벽이 능선을 타지 않고 판판한 접시 위에 놓인 것처럼 보인다.
+let jeruDEM = null;
+function buildJeruDEM() {
+  if (jeruDEM || !canaanTex || !canaanTile) return;
+  const img = canaanTex.image;
+  if (!img || !img.width) return;
+  try {
+    const t = canaanTile, W = img.width, H = img.height;
+    const px = lon => (lon - t.lonMin) / (t.lonMax - t.lonMin) * (W - 1);
+    const py = lat => (t.latMax - lat) / (t.latMax - t.latMin) * (H - 1);
+    const pad = 0.016;                       // 1.5 km 남짓
+    const x0 = Math.max(0, Math.floor(px(JERU.lon - pad)));
+    const x1 = Math.min(W - 1, Math.ceil(px(JERU.lon + pad)));
+    const y0 = Math.max(0, Math.floor(py(JERU.lat + pad)));
+    const y1 = Math.min(H - 1, Math.ceil(py(JERU.lat - pad)));
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    if (w < 2 || h < 2) return;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data;
+    const m = new Int16Array(w * h);
+    for (let i = 0; i < w * h; i++) m[i] = d[i * 4] * 256 + d[i * 4 + 1] - 6000;
+    jeruDEM = { t: t, W: W, H: H, x0: x0, y0: y0, w: w, h: h, m: m };
+  } catch (e) { console.warn('예루살렘 지면을 읽지 못했습니다', e); }
+}
+
+/** 그 자리의 땅 높이(미터) */
+function jeruElevM(lat, lon) {
+  const D = jeruDEM;
+  if (D) {
+    const fx = (lon - D.t.lonMin) / (D.t.lonMax - D.t.lonMin) * (D.W - 1) - D.x0;
+    const fy = (D.t.latMax - lat) / (D.t.latMax - D.t.latMin) * (D.H - 1) - D.y0;
+    if (fx >= 0 && fy >= 0 && fx <= D.w - 1 && fy <= D.h - 1) {
+      const ix = Math.floor(fx), iy = Math.floor(fy);
+      const jx = Math.min(ix + 1, D.w - 1), jy = Math.min(iy + 1, D.h - 1);
+      const tx = fx - ix, ty = fy - iy;
+      const a = D.m[iy * D.w + ix], b = D.m[iy * D.w + jx];
+      const c = D.m[jy * D.w + ix], e = D.m[jy * D.w + jx];
+      return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + e * tx) * ty;
+    }
+  }
+  return groundY(lat, lon) / (0.001 * VEXAG);
+}
+
+/** 성전 지역 지면을 0 으로 본 그 자리의 지면 높이 (모형 안의 값) */
+let jeruBase = 0;
+function jground(x, z) {
+  const g = jgeo(x, z);
+  return (jeruElevM(g.lat, g.lon) - jeruBase) * VEXAG;
+}
+
+/** 앱의 hash2 와 같은 뜻 — 자리마다 늘 같은 값이 나오는 흩뿌리개 */
+function jhash(a, b) {
+  let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263)) | 0;
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1274126177) | 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h & 0xFFFFFF) / 0xFFFFFF;
+}
+
+/** 다각형 안인가 (앞이 x, 뒤가 z) */
+function jpip(poly, x, z) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a[1] > z) !== (b[1] > z)
+      && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+// ── 돌·회벽·지붕 무늬 ─────────────────────────────────────
+
+function jTexAshlar(base, line, rows, cols, rough) {
+  const P = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = P;
+  const g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0, 0, P, P);
+  const rh = P / rows, bw = P / cols;
+  let seed = 0;
+  const rgb = base.match(/\d+/g).map(Number);
+  for (let r = 0; r < rows; r++) {
+    const y = r * rh, off = r % 2 === 0 ? 0 : bw / 2;
+    for (let x = -off; x < P; x += bw) {
+      seed++;
+      const t = jhash(seed, r * 31), d = Math.round((t - 0.5) * 2 * rough * 255);
+      g.fillStyle = 'rgb(' + Math.max(0, Math.min(255, rgb[0] + d)) + ','
+        + Math.max(0, Math.min(255, rgb[1] + d)) + ','
+        + Math.max(0, Math.min(255, rgb[2] + d)) + ')';
+      g.fillRect(x + 1.2, y + 1.2, bw - 2.4, rh - 2.4);
+    }
+  }
+  g.strokeStyle = line; g.lineWidth = 2;
+  g.beginPath();
+  for (let r = 0; r <= rows; r++) { g.moveTo(0, r * rh); g.lineTo(P, r * rh); }
+  g.stroke();
+  g.lineWidth = 1.6;
+  g.beginPath();
+  for (let r = 0; r < rows; r++) {
+    const y = r * rh, off = r % 2 === 0 ? 0 : bw / 2;
+    for (let x = -off; x < P; x += bw) { g.moveTo(x, y); g.lineTo(x, y + rh); }
+  }
+  g.stroke();
+  return c;
+}
+
+function jTexPlaster() {
+  const P = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = P;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(214,199,168)'; g.fillRect(0, 0, P, P);
+  for (let i = 0; i < 260; i++) {
+    const x = jhash(i, 611) * P, y = jhash(i, 977) * P;
+    const r = 6 + jhash(i, 1301) * 26, v = 0.78 + jhash(i, 1777) * 0.14;
+    g.fillStyle = 'rgba(' + Math.round(v * 1.04 * 255) + ',' + Math.round(v * 0.96 * 255)
+      + ',' + Math.round(v * 0.82 * 255) + ',0.35)';
+    g.beginPath(); g.ellipse(x, y, r, r * 0.7, 0, 0, 6.2832); g.fill();
+  }
+  g.fillStyle = 'rgba(179,166,140,0.85)';
+  g.fillRect(0, P * 0.86, P, P * 0.14);
+  return c;
+}
+
+function jTexRoof() {
+  const P = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = P;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(168,145,107)'; g.fillRect(0, 0, P, P);
+  g.strokeStyle = 'rgba(133,112,79,0.55)'; g.lineWidth = 2.5;
+  g.beginPath();
+  for (let y = 0; y < P; y += 14) { g.moveTo(0, y); g.lineTo(P, y); }
+  g.stroke();
+  for (let i = 0; i < 160; i++) {
+    const x = jhash(i, 2311) * P, y = jhash(i, 3319) * P, v = 0.55 + jhash(i, 4111) * 0.18;
+    g.fillStyle = 'rgba(' + Math.round(v * 1.08 * 255) + ',' + Math.round(v * 255)
+      + ',' + Math.round(v * 0.78 * 255) + ',0.4)';
+    g.fillRect(x, y, 5, 3);
+  }
+  return c;
+}
+
+/** 감람나무 한 그루 — 십자로 세워 붙일 그림 */
+function jTexOlive() {
+  const P = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = P;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, P, P);
+  g.fillStyle = '#6b5a44';
+  g.fillRect(P * 0.46, P * 0.55, P * 0.08, P * 0.45);
+  g.fillRect(P * 0.42, P * 0.72, P * 0.06, P * 0.20);
+  for (let i = 0; i < 28; i++) {
+    const a = jhash(i, 71) * 6.2832, r = jhash(i, 97);
+    const x = P * 0.5 + Math.cos(a) * P * 0.30 * r;
+    const y = P * 0.40 + Math.sin(a) * P * 0.24 * r;
+    const s = P * (0.09 + jhash(i, 131) * 0.09);
+    const v = 0.42 + jhash(i, 173) * 0.26;
+    g.fillStyle = 'rgba(' + Math.round(v * 165) + ',' + Math.round(v * 205)
+      + ',' + Math.round(v * 130) + ',0.95)';
+    g.beginPath(); g.ellipse(x, y, s, s * 0.82, 0, 0, 6.2832); g.fill();
+  }
+  return c;
+}
+
+// 빛깔 (앱과 같다)
+const JW = [1, 1, 1];
+const J_ASHLAR = [0.90, 0.88, 0.82], J_ASHLAR_LO = [0.82, 0.79, 0.71];
+const J_BRONZE = [0.70, 0.45, 0.20], J_BRONZE_LT = [0.80, 0.55, 0.26];
+const J_CEDAR = [0.48, 0.33, 0.20];
+const J_DARK = [0.10, 0.10, 0.10], J_WIN = [0.14, 0.14, 0.14];
+
+// ── 상자 쌓기 (앱의 Mason) ────────────────────────────────
+
+function Mason(tile) {
+  this.t = tile;
+  this.p = []; this.n = []; this.u = []; this.c = []; this.i = []; this.v = 0;
+}
+Mason.prototype.quad = function (a, b, c, d, nx, ny, nz, uw, uh, col) {
+  const P = this.p, N = this.n, U = this.u, C = this.c, I = this.i, k = this.v;
+  P.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], d[0], d[1], d[2]);
+  for (let q = 0; q < 4; q++) { N.push(nx, ny, nz); C.push(col[0], col[1], col[2]); }
+  U.push(0, 0, uw, 0, uw, uh, 0, uh);
+  I.push(k, k + 1, k + 2, k, k + 2, k + 3);
+  this.v = k + 4;
+};
+/** 밑면 한가운데가 (x, y, z) 인 직육면체 */
+Mason.prototype.box = function (x, z, y, w, d, h, yaw, top, col) {
+  yaw = yaw || 0; col = col || JW;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), t = this.t;
+  const hx = w / 2, hz = d / 2;
+  const p = (lx, ly, lz) => [x + lx * cy - lz * sy, y + ly, z + lx * sy + lz * cy];
+  const a0 = p(-hx, 0, -hz), a1 = p(hx, 0, -hz), a2 = p(hx, 0, hz), a3 = p(-hx, 0, hz);
+  const b0 = p(-hx, h, -hz), b1 = p(hx, h, -hz), b2 = p(hx, h, hz), b3 = p(-hx, h, hz);
+  const uw = Math.max(w / t, 0.05), ud = Math.max(d / t, 0.05), uh = Math.max(h / t, 0.05);
+  this.quad(a0, a1, b1, b0, sy, 0, -cy, uw, uh, col);
+  this.quad(a1, a2, b2, b1, cy, 0, sy, ud, uh, col);
+  this.quad(a2, a3, b3, b2, -sy, 0, cy, uw, uh, col);
+  this.quad(a3, a0, b0, b3, -cy, 0, -sy, ud, uh, col);
+  if (top !== false) this.quad(b0, b1, b2, b3, 0, 1, 0, uw, ud, col);
+};
+/** 두 점을 잇는 벽 한 구간 */
+Mason.prototype.wall = function (ax, az, bx, bz, y, thick, h, col) {
+  const dx = bx - ax, dz = bz - az;
+  const len = Math.sqrt(dx * dx + dz * dz);
+  if (len < 0.05) return;
+  this.box((ax + bx) / 2, (az + bz) / 2, y, len, thick, h, Math.atan2(dz, dx), true, col);
+};
+/** 밑반지름 r0, 윗반지름 r1 인 원기둥 토막 */
+Mason.prototype.cone = function (x, z, y, r0, r1, h, col, seg) {
+  seg = seg || 10;
+  for (let k = 0; k < seg; k++) {
+    const a0 = k / seg * 6.283185307, a1 = (k + 1) / seg * 6.283185307;
+    const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+    const am = (a0 + a1) / 2;
+    this.quad([x + c0 * r0, y, z + s0 * r0], [x + c1 * r0, y, z + s1 * r0],
+              [x + c1 * r1, y + h, z + s1 * r1], [x + c0 * r1, y + h, z + s0 * r1],
+              Math.cos(am), 0.25, Math.sin(am), 1, 1, col);
+  }
+  // 윗면
+  for (let k = 0; k < seg; k++) {
+    const a0 = k / seg * 6.283185307, a1 = (k + 1) / seg * 6.283185307;
+    this.quad([x, y + h, z], [x + Math.cos(a0) * r1, y + h, z + Math.sin(a0) * r1],
+              [x + Math.cos(a1) * r1, y + h, z + Math.sin(a1) * r1], [x, y + h, z],
+              0, 1, 0, 1, 1, col);
+  }
+};
+/** 공 (세로로 눌러 놓을 수 있다) */
+Mason.prototype.ball = function (x, y, z, r, flat, col, seg, ring) {
+  seg = seg || 8; ring = ring || 5; flat = flat === undefined ? 1 : flat;
+  for (let j = 0; j < ring; j++) {
+    const p0 = j / ring * Math.PI, p1 = (j + 1) / ring * Math.PI;
+    for (let k = 0; k < seg; k++) {
+      const t0 = k / seg * 6.283185307, t1 = (k + 1) / seg * 6.283185307;
+      const P = (p, t) => [x + Math.sin(p) * Math.cos(t) * r,
+                           y + Math.cos(p) * r * flat,
+                           z + Math.sin(p) * Math.sin(t) * r];
+      const m = (p0 + p1) / 2, tm = (t0 + t1) / 2;
+      this.quad(P(p0, t0), P(p0, t1), P(p1, t1), P(p1, t0),
+                Math.sin(m) * Math.cos(tm), Math.cos(m), Math.sin(m) * Math.sin(tm),
+                1, 1, col);
+    }
+  }
+};
+/** 십자로 세운 두 장 — 나무 */
+Mason.prototype.cross = function (x, y, z, w, h, yaw) {
+  const col = JW;
+  for (let q = 0; q < 2; q++) {
+    const a = yaw + q * 1.5707963;
+    const cx = Math.cos(a) * w / 2, cz = Math.sin(a) * w / 2;
+    this.quad([x - cx, y, z - cz], [x + cx, y, z + cz],
+              [x + cx, y + h, z + cz], [x - cx, y + h, z - cz],
+              0, 1, 0, 1, 1, col);
+  }
+};
+
+// ── 재질 — 지형과 똑같은 해와 안개를 쓴다 ────────────────
+const jeruMats = [];
+function jeruMaterial(canvas, cut) {
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  const m = new THREE.ShaderMaterial({
+    uniforms: {
+      map: { value: tex },
+      sun: { value: new THREE.Vector3(0.55, 0.72, 0.42).normalize() },
+      fogCol: { value: new THREE.Color(HAZE) },
+      fogDen: { value: fogDenNow() },
+      cut: { value: cut ? 1 : 0 }
+    },
+    side: THREE.DoubleSide,
+    transparent: false,
+    vertexShader: [
+      'attribute vec3 vcol;',
+      'varying vec2 vU; varying vec3 vN; varying vec3 vC; varying vec3 vP;',
+      'void main() {',
+      '  vU = uv; vC = vcol;',
+      '  vN = normalize(mat3(modelMatrix) * normal);',
+      '  vec4 wp = modelMatrix * vec4(position, 1.0);',
+      '  vP = wp.xyz;',
+      '  gl_Position = projectionMatrix * viewMatrix * wp;',
+      '}'
+    ].join('\n'),
+    fragmentShader: [
+      'uniform sampler2D map; uniform vec3 sun; uniform vec3 fogCol;',
+      'uniform float fogDen; uniform float cut;',
+      'varying vec2 vU; varying vec3 vN; varying vec3 vC; varying vec3 vP;',
+      'void main() {',
+      '  vec4 t = texture2D(map, vU);',
+      '  if (cut > 0.5 && t.a < 0.5) discard;',
+      '  vec3 col = vC * t.rgb;',
+      '  vec3 n = normalize(vN);',
+      '  if (!gl_FrontFacing) n = -n;',
+      '  float lam = clamp(dot(n, sun), 0.0, 1.0);',
+      '  float sky = 0.5 + 0.5 * n.y;',
+      '  col = col * (vec3(1.02,0.99,0.94) * (0.30 + 0.80 * lam)',
+      '             + vec3(0.42,0.48,0.56) * (0.30 * sky));',
+      '  float d = length(vP - cameraPosition);',
+      '  float f = 1.0 - exp(-fogDen * fogDen * d * d);',
+      '  gl_FragColor = vec4(mix(col, fogCol, clamp(f, 0.0, 1.0)), 1.0);',
+      '}'
+    ].join('\n')
+  });
+  jeruMats.push(m);
+  return m;
+}
+
+function jeruMesh(M, mat) {
+  if (!M.v) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(M.p, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(M.n, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(M.u, 2));
+  g.setAttribute('vcol', new THREE.Float32BufferAttribute(M.c, 3));
+  g.setIndex(M.i);
+  return new THREE.Mesh(g, mat);
+}
+
+// ── 자리 ──────────────────────────────────────────────────
+//
+// 「솔로몬 시대의 성전 지역」 등고선판에 맞춘 값이다. 윗도시는 동서로
+// 0.739 배 좁히고 145 m 북으로, 다윗의 도시는 남북 0.893 배로 줄인다.
+function jFitUpper(p) { return [(p[0] - 17) * 0.739 + 15.5, (p[1] - 72) * 0.750 - 73]; }
+function jFitCity(p) { return [p[0], (p[1] - 600) * 0.893 + 521.5]; }
+
+const J_RAW_UPPER = [
+  [-30, 352], [-70, 320], [-112, 268], [-150, 198], [-174, 118],
+  [-180, 18], [-174, -72], [-158, -142], [-118, -186], [-58, -204],
+  [16, -208], [92, -196], [152, -162], [196, -104], [214, -30],
+  [212, 52], [196, 132], [170, 210], [136, 276], [96, 322],
+  [58, 344], [30, 352]
+];
+const J_RAW_CITY = [
+  [-30, 352], [-44, 392], [-54, 452], [-58, 522], [-56, 592],
+  [-50, 656], [-42, 716], [-32, 770], [-20, 812], [-6, 840],
+  [10, 848], [26, 838], [38, 812], [48, 772], [54, 718],
+  [57, 650], [56, 580], [52, 500], [44, 430], [36, 384],
+  [30, 352]
+];
+const J_UPPER = J_RAW_UPPER.map(jFitUpper);
+const J_CITY = J_RAW_CITY.map(jFitCity);
+
+// 성문과 망대 — 이름표와 구조물이 같은 자리에서 나오도록 한 목록에 둔다
+const J_RAW_MARKS = [
+  ['양 문', 60, -201, 0.156, 1], ['메아 망대', 10, -208, -0.054, 0],
+  ['하나넬 망대', -44, -205, -0.054, 0], ['물고기 문', -96, -193, -0.291, 1],
+  ['옛 도시 문', -138, -164, -0.833, 1], ['화덕 망대', -166, -107, -1.345, 0],
+  ['모퉁이 문', -177, -27, -1.504, 1], ['에브라임 문', -177, 68, -1.630, 1],
+  ['골짜기 문', -57, 520, 1.628, 1], ['잿더미 문', -13, 826, 1.107, 1],
+  ['샘 문', 18, 843, -0.558, 1], ['물 문', 48, 465, 1.457, 1],
+  ['말 문', 183, 171, 1.892, 1], ['경비대 문', 204, 92, 1.768, 1],
+  ['검사 문', 213, 11, 1.595, 1]
+];
+const J_MARKS = J_RAW_MARKS.map(m => {
+  const p = m[2] < 352 ? jFitUpper([m[1], m[2]]) : jFitCity([m[1], m[2]]);
+  return { ko: m[0], x: p[0], z: p[1], yaw: m[3], gate: !!m[4] };
+});
+
+// ── 성전 본채 ─────────────────────────────────────────────
+function jTemple(ST, SOL) {
+  const hallLen = cbt(60), hallWid = cbt(20), hallHgt = cbt(30);
+  const porchLen = cbt(10), porchWid = cbt(20);
+
+  // 기단 — 성전이 안뜰보다 세 단 높다
+  const podW = hallLen + cbt(14) + porchLen + 7.6;
+  const podD = hallWid + cbt(14) + 7.6;
+  const insets = [0.0, 1.1, 2.2];
+  for (let i = 0; i < 3; i++)
+    ST.box(0, 0, i * 0.7, podW - insets[i] * 2, podD - insets[i] * 2, 0.75);
+  const baseY = 2.25;
+
+  // 곁방 — 3층. 위층으로 갈수록 벽이 얇아 층이 넓어진다.
+  const tierDepth = [cbt(5), cbt(6), cbt(7)];
+  const tierBase = [0.0, cbt(5.4), cbt(10.8)];
+  const hallCx = -porchLen / 2;
+  for (let i = 0; i < 3; i++) {
+    const dep = tierDepth[i], y = baseY + tierBase[i];
+    const w = hallLen + dep * 2, d = hallWid + dep * 2;
+    ST.box(hallCx, 0, y, w, d, cbt(5.4));
+    // 「성전 벽을 파지 않으려고 바깥벽에 턱을 만들었다」 — 그 턱이 겉으로도 보인다
+    ST.box(hallCx, 0, y + cbt(5.4) - 0.30, w + 0.34, d + 0.34, 0.30);
+    const winY = y + cbt(2.6);
+    for (let k = -5; k <= 5; k++) {
+      const wx = hallCx + k * cbt(5.2);
+      for (const sz of [-1, 1]) ST.box(wx, sz * (d / 2 + 0.05), winY, cbt(1.1), 0.12, cbt(2.0));
+    }
+  }
+
+  ST.box(hallCx, 0, baseY, hallLen, hallWid, hallHgt);          // 본채
+
+  const upperX = hallCx - cbt(3), upperY = baseY + hallHgt;      // 옥상방
+  ST.box(upperX, 0, upperY, hallLen - cbt(9), hallWid - cbt(3), cbt(9));
+
+  const eaveY = upperY + cbt(9);                                 // 처마
+  ST.box(upperX, 0, eaveY, hallLen - cbt(6), hallWid, 0.55);
+  const paraY = eaveY + 0.55;                                    // 옥상 난간
+  for (const sz of [-1, 1])
+    ST.box(upperX, sz * (hallWid / 2 - 0.2), paraY, hallLen - cbt(6), 0.34, cbt(2.2));
+  for (const sx of [-1, 1])
+    ST.box(upperX + sx * ((hallLen - cbt(6)) / 2 - 0.17), 0, paraY, 0.34, hallWid, cbt(2.2));
+
+  // 현관 — 도면처럼 본채보다 높이 솟는다
+  const porchX = hallLen / 2 + porchLen / 2, porchH = cbt(48);
+  ST.box(porchX, 0, baseY, porchLen, porchWid, porchH);
+  ST.box(porchX, 0, baseY + porchH, porchLen + 1.2, porchWid + 1.2, 0.7);
+
+  // 현관 어귀 — 백향목 두 짝 문과 그 둘레의 문설주
+  const doorFace = porchX + porchLen / 2;
+  SOL.box(doorFace - 0.25, 0, baseY, 0.5, cbt(9), cbt(17), 0, true, J_CEDAR);
+  for (const sz of [-1, 1])
+    ST.box(doorFace - 0.15, sz * cbt(5.4), baseY, 0.7, cbt(1.8), cbt(18.4));
+  ST.box(doorFace - 0.15, 0, baseY + cbt(17), 0.8, cbt(12.6), cbt(1.4));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1])
+    ST.box(porchX + sx * (porchLen / 2 - 0.25), sz * (porchWid / 2 - 0.25),
+           baseY, cbt(2.2), cbt(2.2), porchH);
+  for (const k of [-1, 1]) for (const sz of [-1, 1])
+    ST.box(porchX + k * cbt(2.4), sz * (porchWid / 2 + 0.05), baseY,
+           cbt(1.0), 0.22, porchH - cbt(3));
+
+  // 창 — 「성전에 붙박이 격자창을 냈다」. 좁고 깊은 홈에 돌 테두리를 두른다.
+  const winY = baseY + cbt(22), winOff = hallWid / 2 + 0.06;
+  for (let i = -4; i <= 4; i++) {
+    const wx = hallCx + i * cbt(6);
+    for (const sz of [-1, 1]) {
+      const wz = sz * winOff;
+      SOL.box(wx, wz, winY, cbt(1.6), 0.16, cbt(3.2), 0, true, J_WIN);
+      for (const sx of [-1, 1]) ST.box(wx + sx * cbt(1.15), wz, winY, cbt(0.7), 0.30, cbt(3.2));
+      ST.box(wx, wz, winY + cbt(3.2), cbt(3.0), 0.34, cbt(0.7));
+      ST.box(wx, wz, winY - cbt(0.6), cbt(3.0), 0.34, cbt(0.6));
+    }
+  }
+
+  // 야긴과 보아스
+  const pillX = porchX + porchLen / 2 + cbt(3.5);
+  for (const sz of [-1, 1]) {
+    const pz = sz * cbt(6), shaftH = cbt(18), shaftR = cbt(2);
+    jColumn(SOL, pillX, pz, baseY, shaftR, shaftH, J_BRONZE);
+    const capBase = baseY + shaftH;
+    SOL.ball(pillX, capBase + cbt(2.4), pz, cbt(2.9), 0.85, J_BRONZE_LT, 12, 7);
+    jColumn(SOL, pillX, pz, capBase + cbt(4.2), cbt(3.1), cbt(0.9), J_BRONZE);
+    for (let ring = 0; ring < 2; ring++) {
+      for (let k = 0; k < 14; k++) {
+        const a = k / 14 * 6.283185307 + ring * 0.22;
+        SOL.ball(pillX + Math.cos(a) * cbt(2.95), capBase + cbt(3.2) + ring * cbt(0.9),
+                 pz + Math.sin(a) * cbt(2.95), cbt(0.55), 1, J_BRONZE, 6, 4);
+      }
+    }
+  }
+
+  // 오르는 계단
+  for (let i = 0; i < 6; i++)
+    ST.box(pillX + cbt(5) + i * 0.62, 0, baseY - (i + 1) * 0.37, 0.64, porchWid, 0.4);
+}
+
+/** 기둥 한 그루 — 밑동, 위로 갈수록 가늘어지는 몸통, 기둥머리 */
+function jColumn(M, x, z, y, radius, height, col) {
+  const baseH = Math.min(radius * 0.7, height * 0.10);
+  const capH = Math.min(radius * 0.95, height * 0.13);
+  const shaftH = Math.max(height - baseH - capH, height * 0.5);
+  M.cone(x, z, y, radius * 1.32, radius * 1.12, baseH, col);
+  M.cone(x, z, y + baseH, radius, radius * 0.86, shaftH, col);
+  M.cone(x, z, y + baseH + shaftH, radius * 0.94, radius * 1.30, capH, col);
+}
+
+// ── 안뜰 기물 ─────────────────────────────────────────────
+function jCourtStuff(SOL) {
+  const ax = cbt(74), aw = cbt(20), ah = cbt(10);
+  SOL.box(ax, 0, 0, aw + 1.8, aw + 1.8, ah * 0.34, 0, true, J_BRONZE);
+  SOL.box(ax, 0, ah * 0.34, aw, aw, ah * 0.46, 0, true, J_BRONZE_LT);
+  SOL.box(ax, 0, ah * 0.80, aw - 1.5, aw - 1.5, ah * 0.20, 0, true, J_BRONZE);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const hx = aw / 2 - 0.55;
+    SOL.box(ax + sx * hx, sz * hx, ah, 0.75, 0.75, 1.0, 0, true, J_BRONZE_LT);
+  }
+  // 오르는 비탈
+  for (let i = 0; i < 10; i++) {
+    const t0 = i / 10, t1 = (i + 1) / 10;
+    const z0 = cbt(21) - cbt(26) / 2 + cbt(26) * (t0 + t1) / 2;
+    SOL.box(ax, z0, 0, cbt(7), cbt(26) / 10 + 0.1, ah * (1 - (t0 + t1) / 2) + 0.2,
+            0, true, J_ASHLAR_LO);
+  }
+
+  // 주조한 바다 — 소 열두 마리 위
+  const sx0 = cbt(58), sz0 = cbt(24), oxR = cbt(4.3);
+  for (let k = 0; k < 12; k++) {
+    const a = k / 12 * 6.283185307 + 0.26;
+    SOL.box(sx0 + Math.cos(a) * oxR, sz0 + Math.sin(a) * oxR, 0,
+            0.58, 0.95, cbt(3.4), a, true, J_BRONZE);
+  }
+  SOL.ball(sx0, cbt(3.4) + cbt(2.5), sz0, cbt(5), 0.6, J_BRONZE_LT, 16, 9);
+  jColumn(SOL, sx0, sz0, cbt(3.4) + cbt(4.5), cbt(5), cbt(0.6), J_BRONZE);
+
+  // 운반대 열 개 — 다섯씩 양쪽에
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 5; i++) {
+      const cx = cbt(36) + i * cbt(11), cz = side * cbt(27);
+      SOL.box(cx, cz, 0.55, cbt(4), cbt(4), cbt(3), 0, true, J_BRONZE);
+      SOL.box(cx, cz, 0.55 + cbt(3), cbt(3.4), cbt(3.4), cbt(1.3), 0, true, J_BRONZE_LT);
+      for (const wx of [-1, 1]) for (const wz of [-1, 1])
+        SOL.box(cx + wx * cbt(2), cz + wz * cbt(2), cbt(0.75),
+                0.15, cbt(3), cbt(1.5), 0, true, J_BRONZE);
+    }
+  }
+  SOL.box(cbt(98), cbt(32), 0, cbt(5), cbt(5), cbt(3), 0, true, J_BRONZE);
+}
+
+/** 제단에서 오르는 연기 */
+function jSmoke() {
+  const M = new Mason(1);
+  const ax = cbt(74), ah = cbt(10);
+  for (let i = 0; i < 10; i++) {
+    const t = i / 9, r = 1.4 + t * 6.5;
+    M.ball(ax + t * 5, ah + 3 + t * 40, t * 7, r, 1, [t, t, t], 8, 5);
+  }
+  if (!M.v) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(M.p, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(M.n, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(M.u, 2));
+  g.setAttribute('vcol', new THREE.Float32BufferAttribute(M.c, 3));
+  g.setIndex(M.i);
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: {},
+    vertexShader: 'attribute vec3 vcol; varying float vT;\nvoid main(){ vT = vcol.x;'
+      + ' gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: 'varying float vT;\nvoid main(){'
+      + ' gl_FragColor = vec4(vec3(0.96), 0.32 - vT * 0.28); }'
+  });
+  const m = new THREE.Mesh(g, mat);
+  m.renderOrder = 3;
+  return m;
+}
+
+// ── 성전 지역 — 축대와 담 ─────────────────────────────────
+function jCourts(ST, RB, SOL) {
+  const gx = cbt(40), gw = 186, gd = 136;
+  const hx = gw / 2, hz = gd / 2;
+  const corners = [[gx - hx, -hz], [gx + hx, -hz], [gx + hx, hz], [gx - hx, hz]];
+
+  // 축대 — 모리아 산 비탈을 깎아 세운 옹벽 (지면까지 내려간다)
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4];
+    for (let k = 0; k < 10; k++) {
+      const t0 = k / 10, t1 = (k + 1) / 10;
+      const p0 = [a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0];
+      const p1 = [a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1];
+      const gy = Math.min(jground((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2), -1);
+      ST.wall(p0[0], p0[1], p1[0], p1[1], gy - 2, 5.0, -gy + 1.0);
+    }
+    for (let k = 0; k <= 6; k++) {
+      const t = k / 6;
+      const px = a[0] + (b[0] - a[0]) * t, pz = a[1] + (b[1] - a[1]) * t;
+      const gy = Math.min(jground(px, pz), -1);
+      ST.box(px, pz, gy - 2, 4.0, 4.0, -gy + 1.6);
+    }
+  }
+
+  ST.box(gx, 0, -1.2, gw - 2, gd - 2, 1.2);                   // 뜰 바닥
+
+  // 담과 총안
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4];
+    RB.wall(a[0], a[1], b[0], b[1], 0, 3.4, 8.5);
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const len = Math.sqrt(dx * dx + dz * dz), n = Math.max(1, Math.floor(len / 5));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      RB.box(a[0] + dx * t, a[1] + dz * t, 8.5, 1.8, 3.8, 1.5, Math.atan2(dz, dx));
+    }
+  }
+
+  ST.box(cbt(28), 0, 0, 128, 84, 0.9);                        // 안뜰 바닥
+
+  // 안뜰 회랑 — 돌기둥에 백향목 들보
+  const ihx = 62, ihz = 40;
+  for (let x = cbt(28) - ihx; x <= cbt(28) + ihx + 0.01; x += 5.2)
+    for (const sz of [-1, 1]) jColumn(SOL, x, sz * ihz, 0.9, 0.5, 5.0, J_ASHLAR_LO);
+  for (let z = -ihz; z <= ihz + 0.01; z += 5.2)
+    for (const sx of [-1, 1]) jColumn(SOL, cbt(28) + sx * ihx, z, 0.9, 0.5, 5.0, J_ASHLAR_LO);
+  for (const sz of [-1, 1])
+    SOL.box(cbt(28), sz * ihz, 5.9, ihx * 2 + 2.4, 3.4, 0.7, 0, true, J_CEDAR);
+  for (const sx of [-1, 1])
+    SOL.box(cbt(28) + sx * ihx, 0, 5.9, 3.4, ihz * 2, 0.7, 0, true, J_CEDAR);
+
+  // 성전 지역 성문 — 양 문(북), 경비대 문(동), 검사 문(동남)
+  jGateHouse(RB, SOL, gx - 20, -hz, 0, 5.0, 0, 15);
+  jGateHouse(RB, SOL, gx + hx, -18, Math.PI / 2, 5.0, 0, 15);
+  jGateHouse(RB, SOL, gx + hx, 34, Math.PI / 2, 4.5, 0, 13);
+}
+
+// ── 성문 · 망대 ───────────────────────────────────────────
+/** 두 망대가 지키는 성문. yaw = 그 자리에서 성벽이 뻗은 방향. */
+function jGateHouse(RB, SOL, x, z, yaw, width, y, towerH) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const at = (al, ac) => [x + al * cy - ac * sy, z + al * sy + ac * cy];
+  for (const s of [-1, 1]) {
+    const p = at(s * (width / 2 + 3.2), 0);
+    RB.box(p[0], p[1], y, 6.4, 7.6, towerH, yaw);
+    for (let k = -1; k <= 1; k++) {
+      const q = at(s * (width / 2 + 3.2) + k * 2.2, 0);
+      RB.box(q[0], q[1], y + towerH, 1.6, 7.6, 1.4, yaw);
+    }
+  }
+  const c0 = at(0, 0);
+  RB.box(c0[0], c0[1], y + 6.2, width + 1.0, 7.6, towerH - 6.2, yaw);
+  SOL.box(c0[0], c0[1], y, width, 7.8, 6.2, yaw, true, J_DARK);
+  SOL.box(c0[0], c0[1], y, width - 0.5, 0.4, 5.4, yaw, true, J_CEDAR);
+}
+
+/** 성벽 위의 망대 — 어귀가 없는 단단한 탑 */
+function jWatchTower(RB, ST, x, z, yaw, y, h) {
+  RB.box(x, z, y - 7.0, 11.0, 11.0, h + 7.0, yaw);
+  ST.box(x, z, y + h, 12.2, 12.2, 1.3, yaw);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    if (Math.abs(i) !== 1 && Math.abs(j) !== 1) continue;
+    const ax = i * 4.2, az = j * 4.2;
+    ST.box(x + ax * cy - az * sy, z + ax * sy + az * cy, y + h + 1.3, 2.5, 2.5, 2.2, yaw);
+  }
+}
+
+// ── 왕궁 구역 ─────────────────────────────────────────────
+//
+// 궁전은 성전 지역 남쪽, 한 단 낮은 **평평한 터** 위에 있었다. 구역이
+// 남쪽으로 기우는 비탈에 걸쳐 있으므로, 터의 높이를 구역 한복판의
+// 지면으로 정하고 그 아래를 옹벽으로 받친다.
+function jPalace(ST, SOL) {
+  const terrace = jground(0, 176) + 0.6;
+  const pc = [[-76, 96], [76, 96], [76, 286], [-76, 286]];
+  for (let i = 0; i < 4; i++) {
+    const a = pc[i], b = pc[(i + 1) % 4];
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const len = Math.sqrt(dx * dx + dz * dz);
+    const n = Math.max(1, Math.ceil(len / 9));
+    const yaw = Math.atan2(dz, dx);
+    for (let k = 0; k < n; k++) {
+      const t0 = k / n, t1 = (k + 1) / n;
+      const mx = a[0] + dx * (t0 + t1) / 2, mz = a[1] + dz * (t0 + t1) / 2;
+      const gy = Math.min(jground(mx, mz), terrace - 0.4);
+      ST.box(mx, mz, gy - 2.0, len / n + 0.4, 4.2, terrace - gy + 2.0, yaw);
+      ST.box(mx, mz, terrace, len / n + 0.4, 2.6, 6.5, yaw);
+    }
+  }
+  ST.box(0, 191, terrace - 0.9, 150, 188, 0.9);                    // 터 바닥
+
+  // 레바논 숲 집 — 100 × 50 × 30 규빗, 백향목 기둥 마흔다섯
+  const fx = -6, fz = 190;
+  const fw = cbt(100), fd = cbt(50), fh = cbt(30);
+  ST.box(fx, fz, terrace, fw + 3.4, fd + 3.4, 1.3);
+  for (let row = 0; row < 3; row++) {
+    const z = fz - fd / 2 + 2.8 + row * (fd - 5.6) / 2;
+    for (let i = 0; i < 15; i++) {
+      const x = fx - fw / 2 + 2.0 + i * (fw - 4.0) / 14;
+      jColumn(SOL, x, z, terrace + 1.3, 0.44, cbt(20), J_CEDAR);
+    }
+  }
+  ST.box(fx, fz, terrace + 1.3 + cbt(20), fw, fd, cbt(9));
+  SOL.box(fx, fz, terrace + 1.3 + fh, fw + 1.4, fd + 1.4, 0.55, 0, true, J_CEDAR);
+
+  // 기둥 현관
+  const px = 2, pz = 154;
+  ST.box(px, pz, terrace, cbt(50), cbt(30), 1.1);
+  for (let i = 0; i < 10; i++)
+    jColumn(SOL, px - cbt(24) + i * cbt(48) / 9, pz - cbt(13), terrace + 1.1,
+            0.52, cbt(18), J_ASHLAR);
+  ST.box(px, pz, terrace + 1.1 + cbt(18), cbt(50), cbt(30), cbt(4));
+
+  // 왕좌 현관 · 궁전 · 파라오의 딸의 집
+  ST.box(16, 129, terrace, cbt(35), cbt(28), cbt(22));
+  ST.box(10, 226, terrace, cbt(58), cbt(40), cbt(24));
+  ST.box(-30, 252, terrace, cbt(40), cbt(30), cbt(20));
+  SOL.box(16, 129, terrace + cbt(22), cbt(37), cbt(30), 0.65, 0, true, J_CEDAR);
+  SOL.box(10, 226, terrace + cbt(24), cbt(60), cbt(42), 0.65, 0, true, J_CEDAR);
+  SOL.box(-30, 252, terrace + cbt(20), cbt(42), cbt(32), 0.65, 0, true, J_CEDAR);
+}
+
+// ── 성벽 ──────────────────────────────────────────────────
+//
+// 기초부터 윗단까지 **모두 같은 두께(4.4 m)** 로 쌓는다. 토막마다 제 발밑
+// 지면을 따로 재기 때문에, 아래를 넓게 잡으면 비탈에서 윗 토막의 밑동이
+// 아랫 토막 위로 튀어나와 벽면이 이 빠진 것처럼 삐죽거린다.
+// 여기서는 높이를 네 배로 늘인 지형을 쓰므로 이웃 토막의 높이 차가 앱보다
+// 크다. 기초를 22 m 아래까지 내려 그 틈이 벌어져 보이지 않게 한다.
+function jCityWalls(RB, ST, SOL) {
+  function circuit(pts, towerEvery) {
+    let count = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b[0] - a[0], dz = b[1] - a[1];
+      const len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 0.5) continue;
+      const yaw = Math.atan2(dz, dx);
+      const segs = Math.max(2, Math.floor(len / 6));
+      for (let k = 0; k < segs; k++) {
+        const t0 = k / segs, t1 = (k + 1) / segs;
+        const mx = a[0] + dx * (t0 + t1) / 2, mz = a[1] + dz * (t0 + t1) / 2;
+        const gy = jground(mx, mz), segW = len / segs + 0.5;
+        RB.box(mx, mz, gy - 22.0, segW, 4.4, 24.0, yaw);        // 기초
+        RB.box(mx, mz, gy + 1.8, segW, 4.4, 10.2, yaw);         // 본체
+        ST.box(mx, mz, gy + 12.0, segW, 4.4, 1.1, yaw);         // 밝은 윗단
+        const merlons = Math.max(1, Math.floor(segW / 4.6));
+        for (let q = 0; q < merlons; q++) {
+          const mt = (q + 0.5) / merlons;
+          ST.box(mx + (mt - 0.5) * segW * Math.cos(yaw),
+                 mz + (mt - 0.5) * segW * Math.sin(yaw),
+                 gy + 13.1, 2.2, 4.4, 1.9, yaw);
+        }
+      }
+      count++;
+      if (count % towerEvery === 0) {
+        const ty = jground(a[0], a[1]);
+        RB.box(a[0], a[1], ty - 12.0, 10.0, 10.0, 32.0, yaw);
+        ST.box(a[0], a[1], ty + 20.0, 10.8, 10.8, 1.2, yaw);
+        for (let k = -1; k <= 1; k++) {
+          const off = k * 3.4;
+          ST.box(a[0] + off * Math.cos(yaw), a[1] + off * Math.sin(yaw),
+                 ty + 21.2, 2.4, 10.4, 2.0, yaw);
+        }
+      }
+    }
+  }
+  circuit(J_UPPER, 3);
+  circuit(J_CITY, 2);
+
+  // 문과 망대 — 이름표와 똑같은 자리에 세운다
+  for (const m of J_MARKS) {
+    const gy = jground(m.x, m.z) - 0.3;
+    if (m.gate) jGateHouse(RB, SOL, m.x, m.z, m.yaw, 4.8, gy, 18);
+    else jWatchTower(RB, ST, m.x, m.z, m.yaw, gy, 26);
+  }
+}
+
+/** 두 점 사이를 지면을 따라 내려가는 벽 */
+function jDrapeWall(M, ax, az, bx, bz, sink, height, thick, step) {
+  const dx = bx - ax, dz = bz - az;
+  const len = Math.sqrt(dx * dx + dz * dz);
+  if (len < 0.05) return;
+  const yaw = Math.atan2(dz, dx);
+  const n = Math.max(1, Math.ceil(len / (step || 8)));
+  for (let k = 0; k < n; k++) {
+    const t0 = k / n, t1 = (k + 1) / n;
+    const mx = ax + dx * (t0 + t1) / 2, mz = az + dz * (t0 + t1) / 2;
+    const gy = jground(mx, mz);
+    M.box(mx, mz, gy - sink, len / n + 0.35, thick, sink + height, yaw);
+  }
+}
+
+// ── 오벨 ──────────────────────────────────────────────────
+function jOphel(RB) {
+  for (const sx of [-1, 1]) {
+    for (let i = 0; i < 8; i++) {
+      const z0 = 68 + i * 42, z1 = z0 + 42;
+      const x0 = sx * (54 - i * 0.9), x1 = sx * (54 - (i + 1) * 0.9);
+      jDrapeWall(RB, x0, z0, x1, z1, 12.0, 11.5, 3.4, 8);
+    }
+  }
+}
+
+// ── 집 ────────────────────────────────────────────────────
+//
+// 철기 시대 성읍은 능선을 따라 길이 나고, 집이 벽을 맞대고 줄지어 붙어
+// 한 덩어리를 이루었다. 그래서 길가에 두세 채씩 무리를 지어 앉히고,
+// 무리 안에서만 벽을 맞댄다. 다 합쳐 여든 채 안쪽 — 다윗의 도시는
+// 5 헥타르 남짓이다.
+function jHouses(WA, RO, ST, SOL) {
+  const laneX = z => -4 + Math.sin((z - 300) / 96) * 9;
+  let made = 0, c = 0;
+  while (c < 46 && made < 78) {
+    c++;
+    const fa = jhash(c, 7717), fb = jhash(c, 9931);
+    const fc = jhash(c, 4451), fd = jhash(c, 2237);
+    const z0 = 306 + fa * 424;
+    const side = fb < 0.5 ? -1 : 1;
+    const x0 = laneX(z0) + side * (11 + fc * 21);
+    if (!jpip(J_CITY, x0, z0)) continue;
+    const base0 = Math.atan2(1.0, (laneX(z0 + 20) - laneX(z0 - 20)) / 40) - Math.PI / 2;
+    const yaw = base0 + (fd - 0.5) * 0.34;
+    const count = 2 + Math.floor(jhash(c, 8807) * 2.6);
+    for (let k = 0; k < count; k++) {
+      const g0 = jhash(c * 41 + k, 611), g1 = jhash(c * 41 + k, 733);
+      const g2 = jhash(c * 41 + k, 877);
+      const dM = 6.4 + g0 * 3.2, wM = 7.6 + g1 * 2.6, hM = 3.6 + g2 * 2.0;
+      const step = k * (dM + 0.3);
+      const x = x0 - step * Math.sin(yaw), z = z0 + step * Math.cos(yaw);
+      if (!jpip(J_CITY, x, z)) break;
+      const gy = jground(x, z);
+      WA.box(x, z, gy - 3.0, wM, dM, hM + 3.0, yaw, false);
+      RO.box(x, z, gy + hM, wM + 0.45, dM + 0.15, 0.35, yaw);
+      const ph = 0.62, py = gy + hM + 0.35;
+      for (const sgn of [-1, 1])
+        WA.box(x + sgn * (wM / 2) * Math.cos(yaw), z + sgn * (wM / 2) * Math.sin(yaw),
+               py, 0.28, dM + 0.15, ph, yaw);
+      if (k === 0 && g2 > 0.55) {
+        const ux = x - wM * 0.16 * Math.cos(yaw), uz = z - wM * 0.16 * Math.sin(yaw);
+        WA.box(ux, uz, py, wM * 0.58, dM * 0.80, 2.4 + g0 * 0.8, yaw, false);
+        RO.box(ux, uz, py + 2.4 + g0 * 0.8, wM * 0.58 + 0.4, dM * 0.80 + 0.4, 0.32, yaw);
+      }
+      made++;
+    }
+  }
+  // 요새 (다윗의 궁전)
+  const fy = jground(0, 372);
+  ST.box(0, 372, fy - 4, 28, 21, 17);
+  for (const sx of [-1, 1]) {
+    ST.box(sx * 12, 363, fy - 4, 6, 6, 23);
+    for (let k = -1; k <= 1; k++) ST.box(sx * 12 + k * 2.0, 363, fy + 19, 1.5, 6.2, 1.4);
+  }
+  SOL.box(0, 372, fy + 13, 29.5, 22.5, 0.6, 0, true, J_CEDAR);
+}
+
+// ── 나무 ──────────────────────────────────────────────────
+function jTrees(TR) {
+  for (let i = 0; i < 200; i++) {
+    const fa = jhash(i, 31337), fb = jhash(i, 55711), fc = jhash(i, 13331);
+    const x = -150 + fa * 320, z = 290 + fb * 640;
+    if (jpip(J_CITY, x, z) && fc < 0.88) continue;
+    const hM = 3.8 + fc * 3.2;
+    TR.cross(x, jground(x, z), z, hM * 1.05, hM, fa * 3.0);
+  }
+}
+
+// ── 조립 ──────────────────────────────────────────────────
+let jeruRoot = null, jeruFail = false;
+
+function buildJerusalem() {
+  if (jeruRoot || jeruFail) return;
+  if (!scene || !window.THREE) return;
+  buildJeruDEM();
+  if (!jeruDEM && !GRIDS.length) return;         // 아직 지형을 못 읽었다
+  try { buildJerusalemUnsafe(); }
+  catch (e) { jeruFail = true; console.warn('예루살렘을 세우지 못했습니다', e); }
+}
+
+function buildJerusalemUnsafe() {
+  const t0 = performance.now();
+  jeruBase = jeruElevM(JERU.lat, JERU.lon);
+
+  const ST = new Mason(3.0);      // 다듬은 돌
+  const RB = new Mason(2.4);      // 막돌
+  const WA = new Mason(2.6);      // 회칠한 집 벽
+  const RO = new Mason(2.0);      // 흙지붕
+  const SOL = new Mason(1.0);     // 구리 · 백향목 — 무늬 없이 빛깔만
+  const TR = new Mason(1.0);      // 나무
+
+  jCourts(ST, RB, SOL);
+  jTemple(ST, SOL);
+  jCourtStuff(SOL);
+  jPalace(ST, SOL);
+  jOphel(RB);
+  jCityWalls(RB, ST, SOL);
+  jHouses(WA, RO, ST, SOL);
+  jTrees(TR);
+
+  const white = document.createElement('canvas');
+  white.width = white.height = 1;
+  const wg = white.getContext('2d');
+  wg.fillStyle = '#fff'; wg.fillRect(0, 0, 1, 1);
+
+  const model = new THREE.Group();
+  const add = (M, mat) => { const m = jeruMesh(M, mat); if (m) model.add(m); };
+  add(ST, jeruMaterial(jTexAshlar('rgb(230,222,201)', 'rgb(179,168,145)', 4, 3, 0.05)));
+  add(RB, jeruMaterial(jTexAshlar('rgb(194,179,145)', 'rgb(140,125,97)', 7, 6, 0.11)));
+  add(WA, jeruMaterial(jTexPlaster()));
+  add(RO, jeruMaterial(jTexRoof()));
+  add(SOL, jeruMaterial(white));
+  add(TR, jeruMaterial(jTexOlive(), true));
+  const sm = jSmoke(); if (sm) model.add(sm);
+
+  jeruRoot = new THREE.Group();
+  jeruRoot.name = 'jerusalem';
+  jeruRoot.position.set(worldX(JERU.lon), jeruBase * 0.001 * VEXAG, worldZ(JERU.lat));
+  // 세 축을 같은 비율로 — 1 모형미터 = 0.001 세계단위
+  jeruRoot.scale.set(0.001, 0.001, 0.001);
+  jeruRoot.add(model);
+  jeruRoot.visible = false;
+  scene.add(jeruRoot);
+  console.log('예루살렘 ' + Math.round(performance.now() - t0) + ' ms');
+}
+
+/** 가까이 왔을 때만 세운다 — 지도를 멀리서 볼 때는 있으나 마나 하다 */
+function updateJerusalem() {
+  const jx = worldX(JERU.lon), jz = worldZ(JERU.lat);
+  const d = Math.hypot(cam.tx - jx, cam.tz - jz);
+  const near = cam.dist < 55 && d < 45;
+  if (near && !jeruRoot) buildJerusalem();
+  if (jeruRoot) jeruRoot.visible = near;
+  if (jeruRoot && near) {
+    const v = fogDenNow();
+    for (const m of jeruMats) if (m.uniforms && m.uniforms.fogDen) m.uniforms.fogDen.value = v;
+  }
+}
+
 // ── 이름표 ────────────────────────────────────────────────
 const labelPool = [];
 let shown = [];
@@ -1507,7 +2436,8 @@ function applyCam() {
     camera.lookAt(cam.tx - Math.sin(cam.az) * 10,
                   eye + Math.tan(Math.max(-1.2, Math.min(1.2, pitch))) * 10,
                   cam.tz - Math.cos(cam.az) * 10);
-    syncFog(); updateDetail(); updateRegions(); updateHUD();
+    syncNear(); syncFog(); updateDetail(); updateJerusalem();
+    updateRegions(); updateHUD();
     return;
   }
   const r = cam.dist * Math.cos(cam.el);
@@ -1520,10 +2450,25 @@ function applyCam() {
   // 길은 세계 눈금으로 그리므로 멀어지면 실오라기가 되고 다가가면 밭두렁이 된다.
   // 배쯤 달라졌을 때만 다시 굽는다 — 끌 때마다 다시 만들 일은 아니다.
   if (routePts && Math.abs(Math.log(cam.dist / (ribbonDist || 1))) > 0.3) drawRoute();
+  syncNear();
   syncFog();
   updateDetail();
+  updateJerusalem();
   updateRegions();
   updateHUD();
+}
+
+// 앞 유리를 어디에 두는가.
+//
+// 500 m 로 못 박아 두었더니 코앞의 것이 죄다 잘려 나갔다 — 도시 모형처럼
+// 작은 것은 다가가도 보이지 않는다. 그렇다고 늘 가까이 두면 멀리 물러섰을 때
+// 깊이 눈금이 모자라 먼 산이 서로 파고든다. 그래서 **보는 거리에 맞춘다.**
+function syncNear() {
+  const want = fpv ? 0.02 : Math.max(0.02, Math.min(0.5, cam.dist * 0.012));
+  if (Math.abs(camera.near - want) > want * 0.25) {
+    camera.near = want;
+    camera.updateProjectionMatrix();
+  }
 }
 
 function groundAt(x, z) { return groundY(latOfZ(z), lonOfX(x)); }
