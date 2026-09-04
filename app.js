@@ -656,6 +656,27 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       // 그래서 앱이 쓰는 것과 같은 눈금을 쓴다 — 사막빛 · 초원빛 · 마른
       // 풀빛 · 젖은 풀빛. 높이는 소금밭(-380 m 아래)과 바위 마루, 눈에만
       // 남겨 둔다. 비탈이 급한 데는 바위빛이 드러난다.
+      // 예전 높이 색 — **가나안 밖**에서는 이쪽이 낫다.
+      // 젖은 정도 모형은 레반트(해안선·분수령·지구대)를 위해 만든 것이라,
+      // 애굽·메소포타미아·소아시아·그리스에 갖다 대면 근거 없는 짐작이 된다.
+      vec3 rampH(float h, bool wet){
+        if (wet)       return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
+        if (h < 0.0)   return mix(vec3(0.44,0.41,0.27), vec3(0.35,0.46,0.26), clamp(h/-450.0+1.0,0.0,1.0));
+        if (h < 200.0) return mix(vec3(0.35,0.46,0.26), vec3(0.44,0.50,0.28), h/200.0);
+        if (h < 500.0) return mix(vec3(0.44,0.50,0.28), vec3(0.55,0.51,0.30), (h-200.0)/300.0);
+        if (h < 900.0) return mix(vec3(0.55,0.51,0.30), vec3(0.58,0.46,0.32), (h-500.0)/400.0);
+        if (h <1600.0) return mix(vec3(0.58,0.46,0.32), vec3(0.52,0.44,0.40), (h-900.0)/700.0);
+        return mix(vec3(0.52,0.44,0.40), vec3(0.88,0.89,0.92), clamp((h-1600.0)/900.0,0.0,1.0));
+      }
+      // 가나안 정밀 구역 한복판이면 1, 완전히 바깥이면 0. 테두리 0.5도에서
+      // 매끄럽게 떨어져, 두 칠하기가 이음매 없이 섞인다. (앱 coreBlend 와 같다)
+      float coreAt(float la, float lo){
+        float g = 0.5;
+        return min(min(smoothstep(0.0, 1.0, (lo - 33.90) / g),
+                       smoothstep(0.0, 1.0, (36.90 - lo) / g)),
+                   min(smoothstep(0.0, 1.0, (la - 30.20) / g),
+                       smoothstep(0.0, 1.0, (33.60 - la) / g)));
+      }
       vec3 ramp(float h, bool wet, float mo, float sl){
         if (wet) return mix(vec3(0.06,0.16,0.25), vec3(0.13,0.31,0.42), clamp(h/-400.0+1.0,0.0,1.0));
         vec3 c;
@@ -724,7 +745,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
           vec2 mu = vec2((lo - moistB.x) / moistB.z, (la - moistB.y) / moistB.w);
           mo = texture2D(moistT, clamp(mu, 0.001, 0.999)).r;
         }
-        vec3 col = hyps > 0.5 ? hypsRamp(h, wet) : ramp(h, wet, mo, 1.0 - n.y);
+        // 가나안 안에서는 젖은 정도로, 밖에서는 예전대로 높이로 칠한다.
+        vec3 col = hyps > 0.5 ? hypsRamp(h, wet)
+                 : mix(rampH(h, wet), ramp(h, wet, mo, 1.0 - n.y), coreAt(la, lo));
 
         // ── 땅에 새긴 길 ─────────────────────────────────────
         // 길을 띠로 얹으면 아무리 다듬어도 「위에 붙인 테이프」다. 가까이서는
