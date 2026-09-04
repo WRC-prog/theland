@@ -857,6 +857,31 @@ const LABSLOT = new Map();
 // 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
 const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
 
+// 앱이 **특별히 크게** 쓰는 곳들. 이름만 보아도 어디쯤인지 잡히는 큰 도시라,
+// 성읍 수백 개 사이에서 한눈에 도드라져야 한다. (앱은 1.55 곱, 여기도 같게)
+const KEYCITY = new Set([
+  '예루살렘', '로마', '바빌론', '니네베', '안티오크(시리아)', '에베소',
+  '알렉산드리아', '아테네', '고린도', '데살로니가', '빌립보', '다마스쿠스',
+  '사마리아', '카이사레아', '티레', '시돈', '멤피스(노브)', '타르수스',
+  '수산', '우르', '하란', '앗수르', '콘스탄티노플', '안티오크(피시디아)',
+  '가데스', '시나이 산(호렙)', '베들레헴', '나사렛', '가버나움'
+]);
+// 크게 쓰는 큰 지형 이름 (앱은 1.35 곱)
+const BIGREGION = new Set([
+  '이스르엘 저지 평야', '유다 산지', '네게브', '샤론 평야',
+  '갈릴리 바다', '소금 바다 (사해)', '유다 광야 (여시몬)', '요르단 골짜기 (고르)'
+]);
+
+// 표시해 둔 곳에 차례로 주는 색 — 앱 MarkOverlay 와 같은 열 가지.
+// 흙빛 지도 위에서 서로 헷갈리지 않게 고른 것이다.
+const MARKCOLOR = ['#fccc57', '#6bc7fa', '#fa8c6b', '#9ee699', '#dba8fa',
+                   '#fcadcc', '#8cebe0', '#f0e09e', '#b8c7fc', '#f5b88c'];
+function markIdx(ko) {
+  let i = 0;
+  for (const k of MARKED) { if (k === ko) return i; i++; }
+  return -1;
+}
+
 // 골라 둔 곳 — 자잘한 마을이라도 **늘** 지도에 뜬다.
 // 찾아 놓고도 지도에 안 보인다는 말이 여기서 나왔다. 앱의 「표시하기」와 같다.
 const MARKED = new Set();
@@ -1021,15 +1046,17 @@ function updateLabels() {
     const d = Math.hypot(s.x - camPos.x, s.y - camPos.y, s.z - camPos.z);
     // 떠 있던 이름에게는 좀 더 먼 데까지 자리를 준다 (되돌아올 때는 좁게)
     const was = LABPREV.has(s.ko);
-    if (!keep && d > reach * detailMul(s.rank) * (was ? 1.22 : 1)) continue;
+    // 주요 도시는 훨씬 멀리서부터 보인다 — 앱이 그렇다
+    const key = s.rank <= 1 && KEYCITY.has(s.ko);
+    if (!keep && d > reach * detailMul(s.rank) * (key ? 1.9 : 1) * (was ? 1.22 : 1)) continue;
     if (fpv && !s.era && hiddenByLand(s, camPos, was)) continue;
     // 자리다툼의 차례. 지파·민족·지역은 **넓은 땅의 이름**이라 성읍 수백 개에
     // 밀려나면 안 된다 — 켜 두었으면 먼저 자리를 잡는다. (예전에는 등급이
     // 높다는 이유로 맨 뒤로 밀려, 110개 한도에 걸려 하나도 안 보였다.)
     const era = !!s.era || s.rank === 9;
-    cand.push({ s, keep: keep, sx: (v.x * .5 + .5) * innerWidth,
+    cand.push({ s, keep: keep, key: key, sx: (v.x * .5 + .5) * innerWidth,
                 sy: (-v.y * .5 + .5) * innerHeight, d,
-                score: (keep ? -2000000 : era ? -900000 : s.rank * 1000) + d
+                score: (keep ? -2000000 : era ? -900000 : key ? -60000 : s.rank * 1000) + d
                        - (was ? 520 : 0) });
   }
   cand.sort((a, b) => a.score - b.score);
@@ -1048,7 +1075,8 @@ function updateLabels() {
     // 골라 둔 곳은 한도에도 자리다툼에도 걸리지 않는다
     if (!c.keep && out.length >= labelCap()) continue;
     const far = c.d / near;                       // 보는 거리의 몇 곱쯤 멀리 있는가
-    const sp = c.keep ? 1 : (far > 2.5 ? 3 : far > 1.5 ? 2 : 1);
+    let sp = c.keep ? 1 : (far > 2.5 ? 3 : far > 1.5 ? 2 : 1);
+    if (c.key) sp = Math.max(sp, 2);              // 큰 글씨에는 그만한 자리를
     const cx = Math.floor(c.sx / cell), cy = Math.floor(c.sy / cell);
     let hit = false;
     for (let a = 0; a < sp && !hit; a++)
@@ -1094,19 +1122,31 @@ function updateLabels() {
     el._site = s;
     const has = byPlace.has(s.ko);
     const ref = s.rank < 4 && REFUGE.has(s.ko);
+    const key = s.rank <= 1 && KEYCITY.has(s.ko);
+    const bigr = s.rank === 4 && BIGREGION.has(s.ko);
+    const mi = MARKED.has(s.ko) ? markIdx(s.ko) : -1;
     // 글씨와 차림새가 그대로면 손대지 않는다. 판마다 다시 써 넣으면
     // 브라우저가 그때마다 글자를 다시 앉혀 미세하게 떨린다.
     const sig = s.ko + '|' + s.rank + '|' + (ref ? 1 : 0) + '|' + (has ? 1 : 0) + '|' +
-                (MARKED.has(s.ko) ? 1 : 0) + '|' + (highlight === s.ko ? 1 : 0) + '|' + L.cur;
+                mi + '|' + (highlight === s.ko ? 1 : 0) + '|' + L.cur;
     if (el._sig !== sig) {
     el._sig = sig;
     el.className = 'lab r' + s.rank + (ref ? ' refuge' : '') +
-                   (MARKED.has(s.ko) ? ' mark' : '') +
+                   (key ? ' key' : '') + (bigr ? ' bigr' : '') +
+                   (mi >= 0 ? ' mark' : '') +
                    (highlight === s.ko ? ' on' : '');
-    el.innerHTML = (ref || has ? '<i></i>' : '') + escapeHTML(L.cur === 'ko' ? s.ko : s.en);
+    // 표시해 둔 곳은 앱처럼 **번호가 달린 알약**으로 — 그냥 글씨 색만
+    // 바꿔서는 성읍 수백 개 사이에서 도무지 찾을 수가 없었다.
+    const tint = mi >= 0 ? MARKCOLOR[mi % MARKCOLOR.length] : null;
+    el.innerHTML = (tint ? '<em style="background:' + tint + '">' + (mi + 1) + '</em>'
+                         : (ref || has ? '<i></i>' : '')) +
+                   escapeHTML(L.cur === 'ko' ? s.ko : s.en);
     // 지파·민족은 앱처럼 **그 땅 색의 판 위에 큰 흰 글씨**로 앉힌다.
     const ac = s.era ? AREACOLOR.get(s.era + '\u0000' + s.ko) : null;
-    if (ac) {
+    if (tint) {
+      el.style.background = 'rgba(15,16,18,.86)';
+      el.style.borderColor = tint;
+    } else if (ac) {
       const p = (m, al) => 'rgba(' + ac.map(v => Math.round(Math.min(255, v * 255 * m))).join(',') +
                            ',' + al + ')';
       el.style.background = p(0.52, 0.88);
@@ -3762,9 +3802,6 @@ jgrpCSS.textContent =
   'font:600 12px/1.3 inherit;padding:6px 10px;border-radius:10px;cursor:pointer;text-align:left}' +
   '.sopts button.sel{background:rgba(253,204,97,.9);color:#231702;border-color:transparent}' +
   '.sopts button s{display:block;text-decoration:none;font-size:10.5px;opacity:.7;margin-top:2px}' +
-  // 표시해 둔 이름표
-  '.lab.mark{color:#ffe6a8}' +
-  '.lab.mark i{background:#ffd36a;box-shadow:0 0 9px rgba(255,211,106,.95)}' +
   // 지파·민족 낱낱이
   '.chips{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 12px 26px}' +
   '.chips .chip{display:inline-flex;align-items:center;gap:5px;cursor:pointer;' +
@@ -3925,9 +3962,36 @@ labSizeCSS.textContent =
   // 손으로 고른 곳은 눈에 띄게 커진다
   '.lab.on{transform:translate(-50%,-50%) scale(1.5);z-index:3;' +
   'text-shadow:0 1px 4px #000,0 0 14px #000,0 0 22px rgba(0,0,0,.9)}' +
+  // 주요 도시 — 앱은 큰 도시를 1.55 곱으로 키운다. 이름만 보아도 어디쯤인지
+  // 잡히는 곳들이라, 성읍 수백 개 사이에서 확실히 도드라져야 한다.
+  '.lab.r0.key{font-size:29px;font-weight:800;letter-spacing:.02em;' +
+  'text-shadow:0 2px 5px #000,0 0 12px #000,0 0 20px rgba(0,0,0,.85)}' +
+  '.lab.r1.key{font-size:24px;font-weight:800;' +
+  'text-shadow:0 2px 5px #000,0 0 12px #000,0 0 18px rgba(0,0,0,.8)}' +
+  '.lab.key i{width:7px;height:7px;border-radius:4px;margin-right:6px}' +
+  '.lab.r4.bigr{font-size:23px}' +
   '@media (max-width:560px){.lab.r0{font-size:16px}.lab.r1{font-size:13.5px}' +
   '.lab.r2{font-size:12px}.lab.r3{font-size:11px}' +
-  '.lab.r4,.lab.r8,.lab.r9{font-size:13px}.lab.r5,.lab.r6{font-size:14.5px}}';
+  '.lab.r4,.lab.r8,.lab.r9{font-size:13px}.lab.r5,.lab.r6{font-size:14.5px}' +
+  '.lab.r0.key{font-size:25px}.lab.r1.key{font-size:21px}.lab.r4.bigr{font-size:17.5px}}' +
+  // 표시해 둔 곳 — 앱 MarkOverlay 와 같은 모양.
+  // 검은 알약에 그 곳 색의 테두리, 왼쪽에 번호 알, 오른쪽에 흰 이름.
+  '.lab.mark{display:inline-flex;align-items:center;gap:8px;' +
+  'border:2px solid;border-radius:999px;padding:4px 14px 4px 4px;' +
+  'color:#fff;font-size:15px;font-weight:600;font-style:normal;letter-spacing:.01em;' +
+  'text-shadow:0 1px 2px rgba(0,0,0,.75);box-shadow:0 2px 10px rgba(0,0,0,.6);z-index:4}' +
+  '.lab.mark em{font-style:normal;min-width:21px;height:21px;padding:0 5px;' +
+  'border-radius:11px;display:inline-flex;align-items:center;justify-content:center;' +
+  'font:700 12.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(0,0,0,.78)}' +
+  '.lab.mark i{display:none}' +
+  // 표시한 곳은 등급이 무엇이든 알약 크기로 맞춘다 — 주요 도시라고
+  // 29px 짜리 알약이 되면 지도를 다 가린다.
+  '.lab.r0.mark,.lab.r1.mark,.lab.r4.mark,.lab.r0.key.mark,.lab.r1.key.mark,' +
+  '.lab.r5.mark,.lab.r6.mark,.lab.r7.mark,.lab.r8.mark,.lab.r9.mark,' +
+  '.lab.r11.mark,.lab.r12.mark{font-size:15px;font-weight:600;letter-spacing:.01em;' +
+  'padding:4px 14px 4px 4px}' +
+  '@media (max-width:560px){.lab.mark{font-size:13px;padding:3px 11px 3px 3px;gap:6px}' +
+  '.lab.mark em{min-width:18px;height:18px;font-size:11px}}';
 document.head.appendChild(labSizeCSS);
 
 /** 화면 아래에 잠깐 뜨는 알림 */
