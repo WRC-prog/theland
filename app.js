@@ -735,7 +735,11 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         //   · 분수령 마루(예루살렘·베들레헴·헤브론·실로) → 풀빛
         if (hyps < 0.5 && !wet) {
           float ca = coreAt(la, lo);
-          float dry = (1.0 - smoothstep(0.08, 0.38, mo)) * ca;
+          // 메마름은 **문턱이 아니라 비탈**이라야 한다. 0.38 에서 뚝 끊었더니
+          // 네게브 북부(브엘-세바 ~200 mm)가 「낮은 땅」이라는 이유로 에스드모아
+          // (~300 mm)보다 푸르게 나왔다 — 거꾸로다. 0.62 까지 완만히 끌면서
+          // 낮은 쪽을 세게 눌러, 경계 지대가 강수량 차례대로 눕게 한다.
+          float dry = pow(max(1.0 - smoothstep(0.0, 0.62, mo), 0.0), 0.75) * ca;
           float grn = smoothstep(0.45, 0.75, mo) * ca;
           col = mix(col, vec3(0.63, 0.56, 0.41), dry * 0.85);
           col = mix(col, vec3(0.34, 0.44, 0.24), grn * 0.75);
