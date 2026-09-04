@@ -1604,7 +1604,18 @@ function applyCam() {
   updateHUD();
 }
 
-function groundAt(x, z) { return groundY(latOfZ(z), lonOfX(x)); }
+/** 그 자리의 **눈에 보이는 겉면** — 물이면 물낯, 뭍이면 땅이다.
+ *
+ *  길은 물낯 위에 얹으면서(floorMeters) 따라가는 동그라미와 카메라는
+ *  바다 **밑바닥**을 밟고 있었다. 그래서 바울의 뱃길에서 길만 물 위에
+ *  또렷하고 동그라미는 물 아래로 가라앉았다. 같은 잣대를 쓰게 한다. */
+function surfaceY(lat, lon) {
+  const g = groundY(lat, lon);
+  const f = floorMeters(lat, lon) * 0.001 * VEXAG;
+  return g > f ? g : f;
+}
+
+function groundAt(x, z) { return surfaceY(latOfZ(z), lonOfX(x)); }
 
 /** 화면에서 끈 만큼 땅이 따라오게 — 눈금은 거리와 기울기에서 나온다 */
 function panBy(dx, dy, dist) {
@@ -3287,7 +3298,7 @@ function syncRunner() {
   }
   if (!following || !routePts) { runnerEl.className = ''; return; }
   const p = followAt(followKm);
-  const v = new THREE.Vector3(worldX(p.lon), groundY(p.lat, p.lon) + 0.15, worldZ(p.lat));
+  const v = new THREE.Vector3(worldX(p.lon), surfaceY(p.lat, p.lon) + 0.15, worldZ(p.lat));
   v.project(camera);
   if (v.z > 1) { runnerEl.className = ''; return; }
   runnerEl.className = 'on';
