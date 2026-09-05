@@ -854,6 +854,39 @@ function tileRect(t, shrinkKm) {
 // 딱 맞춰 비우면 그 사이에 아무것도 안 그려진 실낱 같은 금이 남았다.
 const SEAM_KM = 2.5;
 
+/** 판 하나를 **곧바로** 엮는다.
+ *
+ *  three 가 주는 PlaneBufferGeometry 는 쓰지도 않는 법선(normal)과 눈금(uv)
+ *  까지 함께 만드느라, 꼭짓점 칠십만 개에 0.4초를 쓴다. 지형 셰이더는 자리
+ *  (position)만 보므로 자리와 삼각형만 곧바로 채운다 — 여남은 곱 빠르고,
+ *  나오는 판은 꼭짓점 하나까지 똑같다.
+ *
+ *  꼭짓점 차례와 삼각형 감는 방향은 PlaneBufferGeometry 를 rotateX(-90°) 한
+ *  것과 그대로 맞춰 두었다. 그래야 앞뒷면이 뒤집히지 않는다.
+ */
+function flatGrid(w, d, segX, segZ, cx, cz) {
+  const nx = segX + 1, nz = segZ + 1;
+  const pos = new Float32Array(nx * nz * 3);
+  const x0 = cx - w / 2, z0 = cz - d / 2, sw = w / segX, sd = d / segZ;
+  for (let j = 0, k = 0; j < nz; j++) {
+    const z = z0 + j * sd;
+    for (let i = 0; i < nx; i++, k += 3) { pos[k] = x0 + i * sw; pos[k + 2] = z; }
+  }
+  const idx = (nx * nz > 65535) ? new Uint32Array(segX * segZ * 6)
+                                : new Uint16Array(segX * segZ * 6);
+  for (let j = 0, k = 0; j < segZ; j++) {
+    for (let i = 0; i < segX; i++) {
+      const a = i + nx * j, b = a + nx;
+      idx[k++] = a; idx[k++] = b; idx[k++] = a + 1;
+      idx[k++] = b; idx[k++] = b + 1; idx[k++] = a + 1;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  return g;
+}
+
 function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const x0 = worldX(tile.lonMin), x1 = worldX(tile.lonMax);
   const z0 = worldZ(tile.latMax), z1 = worldZ(tile.latMin);   // 위도는 뒤집힌다
@@ -865,11 +898,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const gw = win ? win.w : w,  gd = win ? win.d : d;
   // win.seg 를 주면 **되쓰는 격자**를 빌려 쓴다 — 새로 엮지 않는다.
   const geo = (win && win.seg) ? unitGrid(win.seg)
-                               : new THREE.PlaneBufferGeometry(gw, gd, segX, segZ);
-  if (!(win && win.seg)) {
-    geo.rotateX(-Math.PI / 2);
-    geo.translate(gx + gw / 2, 0, gz + gd / 2);
-  }
+                               : flatGrid(gw, gd, segX, segZ, gx + gw / 2, gz + gd / 2);
 
   const iw = (tex.image && tex.image.width)  || tile.w;
   const ih = (tex.image && tex.image.height) || tile.h;
@@ -1266,8 +1295,7 @@ const unitGrids = new Map();
 function unitGrid(seg) {
   let g = unitGrids.get(seg);
   if (!g) {
-    g = new THREE.PlaneBufferGeometry(1, 1, seg, seg);
-    g.rotateX(-Math.PI / 2);
+    g = flatGrid(1, 1, seg, seg, 0, 0);
     unitGrids.set(seg, g);
   }
   return g;
