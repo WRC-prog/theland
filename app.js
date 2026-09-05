@@ -896,8 +896,8 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   // 그대로 두므로, 같은 그림에서 훨씬 촘촘한 판을 뜰 수 있다.
   const gx = win ? win.x : x0, gz = win ? win.z : z0;
   const gw = win ? win.w : w,  gd = win ? win.d : d;
-  // win.seg 를 주면 **되쓰는 격자**를 빌려 쓴다 — 새로 엮지 않는다.
-  const geo = (win && win.seg) ? unitGrid(win.seg)
+  // win.geo 를 주면 **되쓰는 격자**를 빌려 쓴다 — 새로 엮지 않는다.
+  const geo = (win && win.geo) ? win.geo
                                : flatGrid(gw, gd, segX, segZ, gx + gw / 2, gz + gd / 2);
 
   const iw = (tex.image && tex.image.width)  || tile.w;
@@ -1181,7 +1181,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   terrainMats.push(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
-  if (win && win.seg) { mesh.position.set(gx + gw / 2, 0, gz + gd / 2); mesh.scale.set(gw, 1, gd); }
+  if (win && win.geo) { mesh.position.set(gx + gw / 2, 0, gz + gd / 2); mesh.scale.set(gw, 1, gd); }
   if (clip) setClips(mesh, Array.isArray(clip) ? clip : [clip]);
   return mesh;
 }
@@ -1265,6 +1265,9 @@ function updateRegions() {
 
 let baseCanaan = null, canaanTex = null, canaanTile = null;
 let detailMesh = null, detailWin = null;
+// 지금 엮어 놓은 조각 판의 칸 수와 크기, 그리고 「다시 엮어야 한다」는 표
+let detailSX = 0, detailSZ = 0, detailW = 0, detailD = 0, detailPend = 0;
+let distKey = '', stillAt = 0;
 
 // 조각 판이 맡은 자리를 큰 판이 비우되, **딱 맞춰 비우지 않는다.**
 //
@@ -1290,29 +1293,31 @@ function setBaseClip(r) {
 // 까닭이 바로 그것이다. 이제 격자는 **한 변이 1 인 네모** 몇 벌만 엮어
 // 두고, 자리와 크기만 바꿔 끼운다. 높이는 어차피 그림에서 읽으므로
 // 격자가 어디에 놓이든 상관이 없다.
-const GRIDSEG = [256, 384, 576, 864];
+// 조각 판의 격자는 **한 번 엮어 두고 되쓴다.**
+//
+// 예전에는 화면을 조금 끌 때마다 판을 통째로 새로 엮었다. 꼭짓점 백만 개를
+// 자바스크립트로 짜 맞추는 일이라, 폰에서는 그때마다 몇 십분의 1초씩 화면이
+// 멎었다 — 끌면 뚝뚝 끊기던 까닭이 그것이다.
+//
+// 이제 격자는 **한 변이 1 인 네모**로 엮어 두고, 자리와 크기만 바꿔 끼운다.
+// 그 자리의 높이는 어차피 그림에서 읽으므로 격자가 어디에 놓이든 상관이 없다.
+// 「가로칸×세로칸」이 같으면 같은 격자를 그대로 쓰므로, **같은 배율로 끌 때는
+// 판을 다시 엮는 일이 아예 없다.**
 const unitGrids = new Map();
-function unitGrid(seg) {
-  let g = unitGrids.get(seg);
-  if (!g) {
-    g = flatGrid(1, 1, seg, seg, 0, 0);
-    unitGrids.set(seg, g);
+function unitGrid(sx, sz) {
+  const k = sx + '\u00d7' + sz;
+  let g = unitGrids.get(k);
+  if (g) { unitGrids.delete(k); unitGrids.set(k, g); return g; }
+  g = flatGrid(1, 1, sx, sz, 0, 0);
+  unitGrids.set(k, g);
+  // 격자 하나가 수십 MB 다. 오래 안 쓴 것은 놓아 준다 (쓰고 있는 것만 빼고)
+  for (let n = 0; unitGrids.size > 3 && n < 6; n++) {
+    const k0 = unitGrids.keys().next().value, v = unitGrids.get(k0);
+    unitGrids.delete(k0);
+    if (detailMesh && detailMesh.geometry === v) { unitGrids.set(k0, v); continue; }
+    v.dispose();
   }
   return g;
-}
-
-/** 격자를 **미리** 엮어 둔다 — 다가갈 때 처음 엮느라 멎지 않게.
- *  지도를 다 띄운 뒤 한가한 틈에 하나씩 짠다. */
-function warmGrids() {
-  const q = GRIDSEG.slice();
-  const idle = window.requestIdleCallback
-    ? f => window.requestIdleCallback(f, { timeout: 4000 })
-    : f => setTimeout(f, 500);
-  (function next() {
-    const seg = q.shift();
-    if (seg == null) return;
-    idle(() => { unitGrid(seg); next(); });
-  })();
 }
 
 function dropDetail() {
@@ -1320,20 +1325,36 @@ function dropDetail() {
   scene.remove(detailMesh);
   detailMesh.material.dispose();          // 격자는 되쓰므로 버리지 않는다
   detailMesh = null; detailWin = null;
+  detailSX = detailSZ = 0; detailW = detailD = 0;
   setBaseClip(null);
 }
 
-function updateDetail() {
+/** 있던 조각 판을 카메라 밑으로 **밀어 놓는다.**
+ *  자리만 바꾸는 것이라 값이 들지 않는다 — 끄는 동안에는 이것만 한다. */
+function slideDetail() {
+  if (!detailMesh) return;
+  const t = canaanTile;
+  const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
+  const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
+  const w = detailW, d = detailD;
+  const cx = Math.min(Math.max(cam.tx, tx0 + w / 2), tx1 - w / 2);
+  const cz = Math.min(Math.max(cam.tz, tz0 + d / 2), tz1 - d / 2);
+  detailMesh.position.set(cx, 0, cz);
+  detailWin = { x: cx - w / 2, z: cz - d / 2, w: w, d: d };
+  setBaseClip(detailWin);
+}
+
+/** 조각 판을 다시 엮는다 — **손을 멈춘 뒤에만** 부른다.
+ *
+ *  칸 크기는 예전과 똑같이 **그림에게 묻는다.** 그림보다 촘촘히 뜨면 높이를
+ *  칸 값 그대로 읽는 탓에 매끈한 비탈이 계단이 되고, 성기게 뜨면 각이 진다.
+ *  그래서 칸 수는 한 칸도 어림잡지 않는다. */
+function makeDetail() {
+  detailPend = 0;
   if (!baseCanaan || !canaanTex) return;
   if (cam.dist > 200) { dropDetail(); return; }   // 멀리서는 큰 판으로 넉넉하다
 
   const half = Math.max(6, Math.min(70, cam.dist * 1.15));
-  const need = !detailWin
-    || Math.abs(cam.tx - detailWin.cx) > half * 0.3
-    || Math.abs(cam.tz - detailWin.cz) > half * 0.3
-    || Math.abs(Math.log(cam.dist / detailWin.dist)) > 0.5;
-  if (!need) return;
-
   const t = canaanTile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
@@ -1341,33 +1362,40 @@ function updateDetail() {
   const w = Math.min(tx1, cam.tx + half) - x, d = Math.min(tz1, cam.tz + half) - z;
   if (w < 2 || d < 2) { dropDetail(); return; }   // 타일 밖이면 그만둔다
 
-  // 그림이 가진 것보다 촘촘히 뜰 까닭은 없다. 칸 크기는 **그림에게 묻는다** —
-  // 더 촘촘한 지형을 구워 올리면 조각도 저절로 그만큼 촘촘해진다.
   const iw = (canaanTex.image && canaanTex.image.width) || t.w;
   const step = Math.max(25, (t.lonMax - t.lonMin) * 94600 / Math.max(iw - 1, 1));
-  const want = Math.max(w, d) * 1000 / step;
-  let seg = GRIDSEG[GRIDSEG.length - 1];
-  for (const g of GRIDSEG) if (g >= want) { seg = g; break; }
-  // 아직 엮어 두지 않은 격자를 **손가락이 눌린 채로** 엮으면 그 순간
-  // 화면이 멎는다. 손을 뗀 뒤에 엮는다 — 그동안은 있던 조각을 그대로 쓴다.
-  if (!unitGrids.has(seg) && (downAt || following || flyAnim)) return;
+  const segX = Math.min(1100, Math.max(80, Math.round(w * 1000 / step)));
+  const segZ = Math.min(1100, Math.max(80, Math.round(d * 1000 / step)));
 
-  if (detailMesh) {
-    // 있던 판은 그대로 두고 **자리와 크기만** 바꾼다 — 값이 거의 안 든다.
-    detailMesh.geometry = unitGrid(seg);
-    detailMesh.position.set(x + w / 2, 0, z + d / 2);
-    detailMesh.scale.set(w, 1, d);
-  } else {
-    detailMesh = makeTerrain(t, 0, 0, canaanTex, null, { x, z, w, d, seg });
+  // 칸 수도 크기도 그대로면 밀어 놓기만 하면 된다
+  if (detailMesh && segX === detailSX && segZ === detailSZ
+      && Math.abs(w - detailW) < 0.02 && Math.abs(d - detailD) < 0.02) { slideDetail(); return; }
+
+  const g = unitGrid(segX, segZ);
+  if (!detailMesh) {
+    detailMesh = makeTerrain(t, 0, 0, canaanTex, null, { x: x, z: z, w: w, d: d, geo: g });
     // 겹치는 띠에서는 **조각 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
     // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
     detailMesh.material.polygonOffsetFactor = -26;
     detailMesh.material.polygonOffsetUnits = -5;
     detailMesh.renderOrder = 1;
     scene.add(detailMesh);
+  } else {
+    detailMesh.geometry = g;
   }
-  detailWin = { cx: cam.tx, cz: cam.tz, dist: cam.dist, x, z, w, d };
+  detailSX = segX; detailSZ = segZ; detailW = w; detailD = d;
+  detailMesh.scale.set(w, 1, d);
+  detailMesh.position.set(x + w / 2, 0, z + d / 2);
+  detailWin = { x: x, z: z, w: w, d: d };
   setBaseClip(detailWin);
+}
+
+function updateDetail() {
+  if (!baseCanaan || !canaanTex) return;
+  if (cam.dist > 200) { dropDetail(); return; }
+  if (!detailMesh) { detailPend = 1; return; }
+  slideDetail();
+  detailPend = 1;                  // 멈추면 눈금에 맞춰 다시 엮는다
 }
 
 // ── 이름표 ────────────────────────────────────────────────
@@ -5090,6 +5118,13 @@ function tick() {
   if (fpv) { const n = performance.now(); stepFpv(fpvT ? Math.min(120, n - fpvT) : 16); fpvT = n; }
   else fpvT = 0;
   if (following) stepFollow();
+  // 배율이 멎은 뒤에야 조각 판을 다시 엮는다 — 끄는 손 밑에서 엮지 않는다
+  {
+    const k = cam.dist.toFixed(3);
+    const n = performance.now();
+    if (k !== distKey) { distKey = k; stillAt = n; }
+    else if (detailPend && !downAt && !flyAnim && n - stillAt > 170) makeDetail();
+  }
   renderer.render(scene, camera);
   updateLabels();
 }
@@ -5159,7 +5194,6 @@ function tick() {
         scene.add(m);
         buildGridAsync(region, texR.image, 420, 240, () => {
           applyCam();                   // 가나안 밖 지명도 땅 위로 올라온다
-          setTimeout(warmGrids, 1200);  // 마지막으로, 조각 판의 격자를 미리
         });
       }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
       }]);
