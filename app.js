@@ -801,9 +801,13 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   // 그대로 두므로, 같은 그림에서 훨씬 촘촘한 판을 뜰 수 있다.
   const gx = win ? win.x : x0, gz = win ? win.z : z0;
   const gw = win ? win.w : w,  gd = win ? win.d : d;
-  const geo = new THREE.PlaneBufferGeometry(gw, gd, segX, segZ);
-  geo.rotateX(-Math.PI / 2);
-  geo.translate(gx + gw / 2, 0, gz + gd / 2);
+  // win.seg 를 주면 **되쓰는 격자**를 빌려 쓴다 — 새로 엮지 않는다.
+  const geo = (win && win.seg) ? unitGrid(win.seg)
+                               : new THREE.PlaneBufferGeometry(gw, gd, segX, segZ);
+  if (!(win && win.seg)) {
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(gx + gw / 2, 0, gz + gd / 2);
+  }
 
   const iw = (tex.image && tex.image.width)  || tile.w;
   const ih = (tex.image && tex.image.height) || tile.h;
@@ -852,12 +856,15 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         return (c.r * 255.0 * 256.0 + c.g * 255.0) - 6000.0;
       }
       void main(){
-        vec3 p = position;
+        // 눈금(uv)은 **세계 자리**에서 뽑는다. 그래야 격자 하나를 자리와
+        // 크기만 바꿔 가며 되쓸 수 있다 — 격자가 어디에 놓이든 그 자리의
+        // 높이를 그림에서 제대로 찾아 온다.
+        vec3 p = (modelMatrix * vec4(position, 1.0)).xyz;
         vUv = vec2((p.x - bounds.x) / bounds.z, 1.0 - (p.z - bounds.y) / bounds.w);
         vH = height(vUv);
         p.y = vH * 0.001 * vex;              // m → km
         vWorld = p;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
       }`,
     fragmentShader: `
       uniform sampler2D hmap;
@@ -1083,6 +1090,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   terrainMats.push(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
+  if (win && win.seg) { mesh.position.set(gx + gw / 2, 0, gz + gd / 2); mesh.scale.set(gw, 1, gd); }
   if (clip) setClips(mesh, Array.isArray(clip) ? clip : [clip]);
   return mesh;
 }
@@ -1129,6 +1137,7 @@ function updateRegions() {
   //  · 한 번에 하나씩만 받는다.
   if (cam.dist > 900) return;
   if (following) return;                    // 걷는 중에는 멎게 하지 않는다
+  if (downAt) return;                       // 끄는 동안에는 건드리지 않는다
   for (const v of regionLoaded.values()) if (v === 'loading') return;
   const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
   const near = 0.5 + cam.dist / 200;          // 다가가는 쪽만 미리 챙긴다
@@ -1157,8 +1166,12 @@ function updateRegions() {
       // 다음 판은 이 판을 다 세운 뒤에 (한 번에 하나씩)
       applyWorldClips();
       // 높이 격자는 성기게 — 이천만 화소를 900×900 으로 훑으면 폰이 멎는다
-      buildGrid(t, tex.image, Math.min(segX, 520), Math.min(segZ, 520));
-      placeSites();
+      // 높이 읽기는 수백만 화소를 훑는 일이라 한 판을 통째로 잡아먹는다.
+      // 판을 세우는 일과 **같은 판에** 몰아 놓으면 그만큼 오래 멎는다.
+      setTimeout(() => {
+        buildGrid(t, tex.image, Math.min(segX, 520), Math.min(segZ, 520));
+        placeSites();
+      }, 0);
     }).catch(() => { regionLoaded.set(t.file, 'none'); });   // 없는 판을 되풀이해 찾지 않는다
   }
 }
@@ -1182,10 +1195,44 @@ function setBaseClip(r) {
     : []);
 }
 
+// 조각 판의 격자는 **한 번 엮어 두고 되쓴다.**
+//
+// 예전에는 화면을 조금 끌 때마다 1100×1100 짜리 판을 새로 엮었다. 꼭짓점
+// 백이십만 개와 삼각형 이백사십만 개를 자바스크립트로 짜 맞추는 일이라,
+// 폰에서는 그때마다 3~4십분의 1초씩 화면이 멎었다 — 끌면 뚝뚝 끊기던
+// 까닭이 바로 그것이다. 이제 격자는 **한 변이 1 인 네모** 몇 벌만 엮어
+// 두고, 자리와 크기만 바꿔 끼운다. 높이는 어차피 그림에서 읽으므로
+// 격자가 어디에 놓이든 상관이 없다.
+const GRIDSEG = [256, 384, 576, 864];
+const unitGrids = new Map();
+function unitGrid(seg) {
+  let g = unitGrids.get(seg);
+  if (!g) {
+    g = new THREE.PlaneBufferGeometry(1, 1, seg, seg);
+    g.rotateX(-Math.PI / 2);
+    unitGrids.set(seg, g);
+  }
+  return g;
+}
+
+/** 격자를 **미리** 엮어 둔다 — 다가갈 때 처음 엮느라 멎지 않게.
+ *  지도를 다 띄운 뒤 한가한 틈에 하나씩 짠다. */
+function warmGrids() {
+  const q = GRIDSEG.slice();
+  const idle = window.requestIdleCallback
+    ? f => window.requestIdleCallback(f, { timeout: 4000 })
+    : f => setTimeout(f, 500);
+  (function next() {
+    const seg = q.shift();
+    if (seg == null) return;
+    idle(() => { unitGrid(seg); next(); });
+  })();
+}
+
 function dropDetail() {
   if (!detailMesh) return;
   scene.remove(detailMesh);
-  detailMesh.geometry.dispose(); detailMesh.material.dispose();
+  detailMesh.material.dispose();          // 격자는 되쓰므로 버리지 않는다
   detailMesh = null; detailWin = null;
   setBaseClip(null);
 }
@@ -1212,17 +1259,27 @@ function updateDetail() {
   // 더 촘촘한 지형을 구워 올리면 조각도 저절로 그만큼 촘촘해진다.
   const iw = (canaanTex.image && canaanTex.image.width) || t.w;
   const step = Math.max(25, (t.lonMax - t.lonMin) * 94600 / Math.max(iw - 1, 1));
-  const segX = Math.min(1100, Math.max(80, Math.round(w * 1000 / step)));
-  const segZ = Math.min(1100, Math.max(80, Math.round(d * 1000 / step)));
+  const want = Math.max(w, d) * 1000 / step;
+  let seg = GRIDSEG[GRIDSEG.length - 1];
+  for (const g of GRIDSEG) if (g >= want) { seg = g; break; }
+  // 아직 엮어 두지 않은 격자를 **손가락이 눌린 채로** 엮으면 그 순간
+  // 화면이 멎는다. 손을 뗀 뒤에 엮는다 — 그동안은 있던 조각을 그대로 쓴다.
+  if (!unitGrids.has(seg) && (downAt || following || flyAnim)) return;
 
-  if (detailMesh) { scene.remove(detailMesh); detailMesh.geometry.dispose(); detailMesh.material.dispose(); }
-  detailMesh = makeTerrain(t, segX, segZ, canaanTex, null, { x, z, w, d });
-  // 겹치는 띠에서는 **조각 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
-  // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
-  detailMesh.material.polygonOffsetFactor = -26;
-  detailMesh.material.polygonOffsetUnits = -5;
-  detailMesh.renderOrder = 1;
-  scene.add(detailMesh);
+  if (detailMesh) {
+    // 있던 판은 그대로 두고 **자리와 크기만** 바꾼다 — 값이 거의 안 든다.
+    detailMesh.geometry = unitGrid(seg);
+    detailMesh.position.set(x + w / 2, 0, z + d / 2);
+    detailMesh.scale.set(w, 1, d);
+  } else {
+    detailMesh = makeTerrain(t, 0, 0, canaanTex, null, { x, z, w, d, seg });
+    // 겹치는 띠에서는 **조각 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
+    // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
+    detailMesh.material.polygonOffsetFactor = -26;
+    detailMesh.material.polygonOffsetUnits = -5;
+    detailMesh.renderOrder = 1;
+    scene.add(detailMesh);
+  }
   detailWin = { cx: cam.tx, cz: cam.tz, dist: cam.dist, x, z, w, d };
   setBaseClip(detailWin);
 }
@@ -5001,6 +5058,7 @@ function tick() {
           buildGrid(region, texR.image, 420, 240);
           placeSites();                 // 가나안 밖 지명도 땅 위로 올라온다
           applyCam();
+          setTimeout(warmGrids, 1200);  // 마지막으로, 조각 판의 격자를 미리
         }, 40);
       }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
     }, 80);
