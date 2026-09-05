@@ -651,6 +651,68 @@ function buildGrid(tile, img, segX, segZ) {
   catch (e) { console.warn('높이를 읽지 못했습니다 — 이름표는 바다 높이에 놓입니다', e); }
 }
 
+/** 높이 그림을 **여러 판에 나눠** 읽는다.
+ *
+ *  3000×3400 짜리 그림을 한 판에 훑으면 그동안 화면이 통째로 멎는다 —
+ *  처음 열 때 1초쯤 얼어붙던 것이 그것이다. 읽어 내는 값은 조금도 달라지지
+ *  않는다. 다만 몇 줄씩 끊어 앉힐 뿐이다. 다 읽은 뒤에야 격자를 내놓으므로,
+ *  읽는 동안 어설픈 높이가 새어 나갈 일도 없다.
+ */
+function buildGridAsync(tile, img, segX, segZ, done) {
+  const fin = () => { try { placeSites(); } catch (e) {} if (done) done(); };
+  let cv, g2, G;
+  try {
+    cv = document.createElement('canvas');
+    cv.width = img.width; cv.height = img.height;
+    g2 = cv.getContext('2d', { willReadFrequently: true });
+    g2.drawImage(img, 0, 0);
+    G = { t: tile, gw: segX + 1, gh: segZ + 1, m: new Int16Array((segX + 1) * (segZ + 1)) };
+  } catch (e) {
+    console.warn('높이를 읽지 못했습니다 — 이름표는 바다 높이에 놓입니다', e);
+    fin(); return;
+  }
+  // 한 판에 읽을 줄 수 — 격자가 넓을수록 적게 끊는다
+  const rows = Math.max(16, Math.min(200, Math.round(2.0e6 / Math.max(G.gw, 1))));
+  let j0 = 0, bad = false;
+  const step = () => {
+    try {
+      const j1 = Math.min(G.gh, j0 + rows);
+      const y0 = Math.round(j0 / segZ * (img.height - 1));
+      const y1 = Math.round((j1 - 1) / segZ * (img.height - 1));
+      const px = g2.getImageData(0, y0, img.width, y1 - y0 + 1).data;
+      for (let j = j0; j < j1; j++) {
+        const row = (Math.round(j / segZ * (img.height - 1)) - y0) * img.width;
+        for (let i = 0; i < G.gw; i++) {
+          const q = (row + Math.round(i / segX * (img.width - 1))) * 4;
+          G.m[j * G.gw + i] = px[q] * 256 + px[q + 1] - 6000;
+        }
+      }
+      j0 = j1;
+    } catch (e) {
+      console.warn('높이를 읽지 못했습니다 — 이름표는 바다 높이에 놓입니다', e);
+      bad = true;
+    }
+    if (!bad && j0 < G.gh) { requestAnimationFrame(step); return; }
+    cv.width = cv.height = 1;                          // 40 MB 짜리 자리를 돌려준다
+    if (!bad) GRIDS.push(G);
+    fin();
+  };
+  requestAnimationFrame(step);
+}
+
+/** 무거운 일을 **한 판에 하나씩** 나눠 한다 — 한꺼번에 하면 화면이 멎는다.
+ *  일마다 next 를 받고, 제 일이 끝나면 next 를 부른다. */
+function inSteps(jobs) {
+  let i = 0;
+  const run = () => {
+    if (i >= jobs.length) return;
+    const f = jobs[i++];
+    try { f(() => requestAnimationFrame(run)); }
+    catch (e) { console.warn(e); requestAnimationFrame(run); }
+  };
+  requestAnimationFrame(run);
+}
+
 function buildGridUnsafe(tile, img, segX, segZ) {
   const cv = document.createElement('canvas');
   cv.width = img.width; cv.height = img.height;
@@ -1166,12 +1228,8 @@ function updateRegions() {
       // 다음 판은 이 판을 다 세운 뒤에 (한 번에 하나씩)
       applyWorldClips();
       // 높이 격자는 성기게 — 이천만 화소를 900×900 으로 훑으면 폰이 멎는다
-      // 높이 읽기는 수백만 화소를 훑는 일이라 한 판을 통째로 잡아먹는다.
-      // 판을 세우는 일과 **같은 판에** 몰아 놓으면 그만큼 오래 멎는다.
-      setTimeout(() => {
-        buildGrid(t, tex.image, Math.min(segX, 520), Math.min(segZ, 520));
-        placeSites();
-      }, 0);
+      // 높이 읽기는 수백만 화소를 훑는 일이라, 한 판에 몰아 하면 그만큼 멎는다.
+      buildGridAsync(t, tex.image, Math.min(segX, 520), Math.min(segZ, 520));
     }).catch(() => { regionLoaded.set(t.file, 'none'); });   // 없는 판을 되풀이해 찾지 않는다
   }
 }
@@ -3047,18 +3105,29 @@ function moistAt(la, lo, e) {
 // 지도 전체의 젖은 정도를 그림 한 장으로. 셰이더가 이것을 읽어 논밭을 그린다.
 let moistTex = null;
 const MOISTB = { lon0: 11.0, lat0: 21.0, lonSpan: 41.0006, latSpan: 22.0 };
-function buildMoist() {
-  if (moistTex) return;
+function buildMoist(done) {
+  if (moistTex) { if (done) done(); return; }
   const W = 700, H = 380;
   const data = new Uint8Array(W * H);
-  for (let jj = 0; jj < H; jj++) {
-    const la = MOISTB.lat0 + (jj + 0.5) / H * MOISTB.latSpan;
-    for (let ii = 0; ii < W; ii++) {
-      const lo = MOISTB.lon0 + (ii + 0.5) / W * MOISTB.lonSpan;
-      const e = groundY(la, lo) / (0.001 * VEXAG);
-      data[jj * W + ii] = Math.round(255 * moistAt(la, lo, e));
+  // 이십육만 칸마다 땅 높이를 물어 보는 일이라, 한 판에 다 하면 그만큼 멎는다.
+  // 마흔 줄씩 끊는다 — 나오는 그림은 한 칸도 다르지 않다.
+  let jj0 = 0;
+  const band = () => {
+    const jj1 = Math.min(H, jj0 + 40);
+    for (let jj = jj0; jj < jj1; jj++) {
+      const la = MOISTB.lat0 + (jj + 0.5) / H * MOISTB.latSpan;
+      for (let ii = 0; ii < W; ii++) {
+        const lo = MOISTB.lon0 + (ii + 0.5) / W * MOISTB.lonSpan;
+        const e = groundY(la, lo) / (0.001 * VEXAG);
+        data[jj * W + ii] = Math.round(255 * moistAt(la, lo, e));
+      }
     }
-  }
+    jj0 = jj1;
+    if (jj0 < H) { requestAnimationFrame(band); return; }
+    finish();
+  };
+  requestAnimationFrame(band);
+  function finish() {
   moistTex = new THREE.DataTexture(data, W, H, THREE.LuminanceFormat);
   moistTex.minFilter = THREE.LinearFilter;
   moistTex.magFilter = THREE.LinearFilter;
@@ -3067,6 +3136,8 @@ function buildMoist() {
   moistTex.needsUpdate = true;
   for (const m of terrainMats)
     if (m.uniforms && m.uniforms.moistT) { m.uniforms.moistT.value = moistTex; m.uniforms.farmOn.value = 1; }
+  if (done) done();
+  }
 }
 
 function inLake(lat, lon) {
@@ -5034,14 +5105,18 @@ function tick() {
     // 얼어붙으면 고장 난 줄 안다. 그래서 지도를 먼저 보여 주고, 이름표는
     // 잠깐 뒤에 땅 위로 내려앉는다.
     setTimeout(() => {
+      // 여기부터는 무거운 일이 줄줄이 이어진다. 예전에는 이것을 **한 판에**
+      // 몰아 했다 — 그래서 지도가 뜨자마자 1초 남짓 얼어붙었다. 이제 한 가지
+      // 일을 마칠 때마다 한 판씩 쉬어 간다. 하는 일도, 나오는 그림도 같다.
+      inSteps([
       // 길을 땅에 붙이려면 땅 높이를 촘촘히 알아야 한다. 600×680(550 m)로는
       // 능선에서 길이 파묻히거나 떠올랐다.
-      buildGrid(canaan, texC.image, 1500, 1700);
-      placeSites();
-      buildMoist();         // 땅빛은 젖은 정도로 칠한다 — 높이 격자가 있어야 굽는다
-      addRivers();          // 강은 땅 높이를 알아야 얹을 수 있다
-      toggleRoads();        // 옛길은 앱처럼 처음부터 깔아 둔다
-      applyCam();
+      next => buildGridAsync(canaan, texC.image, 1500, 1700, next),
+      next => { applyCam(); next(); },
+      next => buildMoist(next),   // 땅빛은 젖은 정도로 칠한다 — 격자가 있어야 굽는다
+      next => { addRivers(); next(); },   // 강은 땅 높이를 알아야 얹을 수 있다
+      next => { toggleRoads(); applyCam(); next(); },  // 옛길은 앱처럼 처음부터
+      next => { next();
 
       loadTexture(qualFile(region.file, region))
       .catch(() => loadTexture(region.file))
@@ -5054,13 +5129,12 @@ function tick() {
         worldMesh = m; worldClips = [canaanClip];
         applyWorldClips();
         scene.add(m);
-        setTimeout(() => {
-          buildGrid(region, texR.image, 420, 240);
-          placeSites();                 // 가나안 밖 지명도 땅 위로 올라온다
-          applyCam();
+        buildGridAsync(region, texR.image, 420, 240, () => {
+          applyCam();                   // 가나안 밖 지명도 땅 위로 올라온다
           setTimeout(warmGrids, 1200);  // 마지막으로, 조각 판의 격자를 미리
-        }, 40);
+        });
       }).catch(e => console.warn('넓은 세계를 못 불러왔습니다', e));
+      }]);
     }, 80);
 
   } catch (e) {
