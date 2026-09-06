@@ -2583,6 +2583,18 @@ function addViewButtons() {
   // 와이파이인데도 데이터라고 하는 일이 있었다. 화질은 위 단추로 바로 고른다.
 }
 
+// 윗줄에 적히는 **숫자는 자리를 고정해 둔다.**
+//
+// 표고와 위경도는 카메라가 움직일 때마다 바뀐다. 그런데 숫자마다 폭이
+// 달라서, 그때마다 왼쪽 상자의 너비가 조금씩 달라졌다. 찾기 칸이 남는
+// 자리를 채우는 구조라 그 흔들림이 그대로 오른쪽 단추 줄까지 옮겨 갔다 —
+// 길을 따라갈 때 툴바가 달달 떨리던 까닭이 그것이다.
+const hudCSS = document.createElement('style');
+hudCSS.textContent = '.hn{display:inline-block;text-align:right;' +
+  'font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}';
+document.head.appendChild(hudCSS);
+function hn(v, ch) { return '<i class="hn" style="width:' + ch + 'ch">' + v + '</i>'; }
+
 function updateHUD() {
   const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
   let best = null, bd = 1e9;
@@ -2596,7 +2608,8 @@ function updateHUD() {
   const m = Math.round(groundY(lat, lon) / (0.001 * VEXAG));
   document.getElementById('hudSub').innerHTML =
     (best ? escapeHTML(L.region(best.region)) + ' · ' : '') +
-    '<b>' + m + ' m</b> · ' + lat.toFixed(3) + '°N ' + lon.toFixed(3) + '°E';
+    '<b>' + hn(m, 4) + ' m</b> · ' + hn(lat.toFixed(3), 6) + '°N ' +
+    hn(lon.toFixed(3), 6) + '°E';
 }
 
 // ── 옆 판 ─────────────────────────────────────────────────
@@ -2780,6 +2793,13 @@ function routeFromText(list) {
   showCard(list[0]);
 }
 
+/** 지금 지도에 그려 둔 길이 **이 줄에서 집어낸 곳들 그대로**인가.
+ *  그렇다면 「경로 만들기」를 또 보여 줄 까닭이 없다 — 눌러도 달라질 것이 없다. */
+function routeIsScan(found) {
+  if (!found || found.length < 2 || !routeStops.length) return false;
+  return routeStops.map(s => s.ko).join('\u0000') === found.map(h => h.s.ko).join('\u0000');
+}
+
 // ── 찾기 ──────────────────────────────────────────────────
 const qEl = document.getElementById('q'), hitsEl = document.getElementById('hits');
 qEl.addEventListener('input', () => {
@@ -2839,11 +2859,24 @@ function scanRow() {
     '</b><span class="schips">' + chips + '</span>' + opts +
     '<span class="sbtns">' +
     '<button data-scan="mark">' + escapeHTML(L.s('표시하기', 'Mark on map')) + '</button>' +
-    '<button data-scan="route" class="go">' +
-    escapeHTML(found.length >= 2 ? L.s('경로 만들기', 'Build route')
-                                 : L.s('이 곳으로', 'Go here')) + '</button>' +
+    // 이미 그 길이 지도에 있으면 「경로 만들기」는 접어 둔다
+    (routeIsScan(found) ? '' :
+      '<button data-scan="route" class="go">' +
+      escapeHTML(found.length >= 2 ? L.s('경로 만들기', 'Build route')
+                                   : L.s('이 곳으로', 'Go here')) + '</button>') +
     '</span></div>';
 }
+
+// 찾기 칸을 **다시 누르면** 아까 그 줄이 곧바로 다시 뜬다.
+//
+// 예전에는 한 번 고르고 나면 칸이 비워지고(hits) 손이 떠나서, 같은 글이
+// 그대로 적혀 있는데도 「표시하기·경로 만들기」를 다시 보려면 글자를
+// 고쳐 넣어야 했다. 이제 칸을 누르기만 하면 된다.
+function reopenHits() {
+  if (qEl.value.trim() && !hitsEl.innerHTML) qEl.dispatchEvent(new Event('input'));
+}
+qEl.addEventListener('focus', reopenHits);
+qEl.addEventListener('click', reopenHits);
 
 hitsEl.addEventListener('click', e => {
   // 어느 라마인지 고르기
