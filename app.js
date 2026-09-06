@@ -2603,6 +2603,7 @@ function updateHUD() {
 const panel = document.getElementById('panel');
 function openPlace(s) {
   panelIsRoutes = false;
+  panelSite = s;
   document.getElementById('pTitle').textContent = L.place(s.ko);
   document.getElementById('pSub').textContent = L.region(s.region);
   const body = document.getElementById('pb');
@@ -4558,6 +4559,7 @@ function assign(s, slot) {
 
 let cardEl = null;
 function showCard(s) {
+  const moved = cardSite !== s;
   cardSite = s;
   if (!cardEl) {
     cardEl = document.createElement('div');
@@ -4595,6 +4597,11 @@ function showCard(s) {
     (here ? '<button id="cMinus" title="' + L.s('길에서 빼기', 'Remove from route') + '">⊖</button>' : '') +
     '<button id="cX">✕</button>';
   cardEl.classList.add('on');
+  // 옆 판이 어떤 곳을 펴 놓고 있었다면 **새로 고른 곳으로 함께 넘긴다.**
+  // 예전에는 카드만 바뀌고 판은 앞서 누른 곳에 머물러 있었다 — 다른 성읍을
+  // 눌러 놓고 엉뚱한 곳의 기록을 읽게 되니 헷갈릴 수밖에 없었다.
+  if (moved && panelSite && panelSite !== s && panel.classList.contains('open'))
+    openPlace(s);
 }
 
 const cardCSS = document.createElement('style');
@@ -4641,6 +4648,7 @@ document.head.appendChild(cardCSS);
 // ── 경로 판 ───────────────────────────────────────────────
 function openLayers() {
   panelIsRoutes = false;
+  panelSite = null;
   document.getElementById('pTitle').textContent = L.s('표시', 'Display');
   document.getElementById('pSub').textContent =
     L.s('지도에 어떤 이름을 띄울지 고릅니다', 'Choose which names the map shows');
@@ -4845,6 +4853,9 @@ function makeLive() {
 }
 
 let panelIsRoutes = false;
+// 옆 판이 지금 **어느 곳**을 펴 놓고 있는가 (곳이 아니면 null).
+// 다른 곳을 누르면 판도 그 곳으로 넘어가야 한다.
+let panelSite = null;
 // 어느 주제를 펼쳐 두었는지 기억한다 — 판을 다시 그려도 접히지 않게.
 const openGroups = new Set();
 
@@ -4929,6 +4940,7 @@ function jrnCard(i) {
 
 function openRoutes() {
   panelIsRoutes = true;
+  panelSite = null;
   document.getElementById('pTitle').textContent = L.s('길', 'Journeys');
   document.getElementById('pSub').textContent = L.s('옛길을 따라갑니다', 'Along the ancient roads');
   const b = document.getElementById('pb');
