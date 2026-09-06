@@ -630,12 +630,6 @@ const KM_LAT = 111.32, KM_LON = 94.6;
 const ORIGIN = { lat: 31.8, lon: 35.2 };      // 예루살렘 언저리를 0 으로
 let VEXAG = 4.0;                              // 높이 과장 (앱의 「축척」과 같은 뜻)
 
-// 앞 자름면(near)을 사람 눈앞까지 당기면 — 「이 자리에 서 보기」가 그렇게 한다 —
-// 깊이 겨루기의 units 몫이 걷잡을 수 없이 부푼다. units 는 **깊이 자릿수 한 칸**
-// 이라, 자름면이 가까울수록 그 한 칸이 먼 곳에서 몇 십 m 가 된다. 그러면 먼 산이
-// 앞산을 뚫고 나온다. 그때는 units 를 눕히고 기울기에 곱해지는 factor 만 남긴다.
-let POU = 1;
-
 function worldX(lon) { return (lon - ORIGIN.lon) * KM_LON; }
 function worldZ(lat) { return -(lat - ORIGIN.lat) * KM_LAT; }
 function lonOfX(x) { return ORIGIN.lon + x / KM_LON; }
@@ -791,8 +785,6 @@ function syncHyps() {
 }
 
 function fogDenNow() {
-  // 눈높이로 서면 안개가 곧 거리다. 40 km 에서 반쯤 잠기게 — 맑은 날의 눈이다.
-  if (standOn) return 0.021;
   return 0.0009 * Math.max(0.12, Math.min(1, 260 / Math.max(40, cam.dist)));
 }
 function syncFog() {
@@ -1205,8 +1197,6 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       }`
   });
   terrainMats.push(mat);
-  mat.__u0 = mat.polygonOffsetUnits;
-  mat.polygonOffsetUnits *= POU;
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   if (win && win.geo) { mesh.position.set(gx + gw / 2, 0, gz + gd / 2); mesh.scale.set(gw, 1, gd); }
@@ -1511,8 +1501,7 @@ function buildLayer(L, h, half) {
     // 겹치는 띠에서는 **촘촘한 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
     // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
     L.mesh.material.polygonOffsetFactor = L.off;
-    L.mesh.material.__u0 = L.unit;
-    L.mesh.material.polygonOffsetUnits = L.unit * POU;
+    L.mesh.material.polygonOffsetUnits = L.unit;
     L.mesh.renderOrder = L.order;
     scene.add(L.mesh);
   } else {
@@ -2121,159 +2110,6 @@ function setFpv(on) {
   syncTravel();
   applyCam();
 }
-
-// ── 「이 자리에 서 보기」 ─────────────────────────────────
-//
-// 지도는 위에서 내려다보는 눈이다. 그런데 성서의 일들은 **땅 위에 선 사람**
-// 의 눈으로 일어났다. 이스르엘 들에 서면 다볼 산이 어떻게 보였는지 — 그것은
-// 위에서는 알 수 없다.
-//
-// 눈높이를 1.7 m 로 내리는 것만으로는 모자란다. 걸림이 둘 있다.
-//   · 높이를 네 배로 늘려 놓았으니 산이 실제보다 네 배 뾰족하다. 물러서서
-//     크기를 맞춰도 소용없다 — 세로만 늘렸으니 모양이 다섯 배 좁아진다.
-//   · 앞 자름면이 500 m 라, 눈높이로 내려서도 발밑이 그려지지 않는다.
-// 그래서 여기서는 그 둘을 함께 바꾸고, 나올 때 고스란히 되돌린다.
-//
-// 자리마다 어울리는 과장이 다르다. 산이 멀찍이 떨어져 선 이스르엘 들은
-// 참 비율(1×)이 곱고, 골이 좁은 유다 산지는 그대로 두면 오히려 밋밋해진다.
-// 우선 한 곳만 두고 본다.
-const STANDS = {
-  // 들의 한복판은 이름표를 걸어 둔 자리일 뿐, 서서 볼 자리는 아니다.
-  // 다볼 산 발치의 들바닥(다베랏 언저리)에 세운다 — 5 km 앞에 산이 선다.
-  '이스르엘 저지 평야': { at: [32.650, 35.360], look: [32.687, 35.391], vex: 1,
-    ko: '다볼 산 · 모레 언덕 · 길보아 산이 둘러선 들',
-    en: 'The plain ringed by Tabor, Moreh and Gilboa' }
-};
-
-/** 그 곳을 바라보는 방위 — 각도를 손으로 적어 두면 뒤에 틀리기 쉽다 */
-function azTo(lat, lon) {
-  return Math.atan2(-(worldX(lon) - cam.tx), -(worldZ(lat) - cam.tz));
-}
-
-let standOn = null, standBar = null, standWait = 0;
-const standSave = {};
-
-/** 그 자리의 높이 자료가 벌써 와 있는가 — 아직이면 바다 높이에 서게 된다 */
-function gridReady(lat, lon) {
-  for (const G of GRIDS) if (gridAt(G, lat, lon) !== null) return true;
-  return false;
-}
-
-/** 깊이 겨루기의 units 몫을 한꺼번에 눕히고 세운다 */
-function setPou(p) {
-  POU = p;
-  const fix = m => {
-    if (!m) return;
-    if (m.__u0 == null) m.__u0 = m.polygonOffsetUnits;
-    m.polygonOffsetUnits = m.__u0 * p;
-  };
-  for (const m of terrainMats) fix(m);
-  for (const m of drapeMats) fix(m);
-  if (FINE.mesh) fix(FINE.mesh.material);
-  if (MID.mesh) fix(MID.mesh.material);
-}
-
-/** 높이 과장을 갈아 끼운다 — 땅도, 길도, 강도, 이름표도 함께 따라온다 */
-function setVexag(v) {
-  VEXAG = v;
-  for (const m of terrainMats) {
-    if (!m.uniforms) continue;
-    if (m.uniforms.vex) m.uniforms.vex.value = v;
-    if (m.uniforms.vexf) m.uniforms.vexf.value = v;
-  }
-  for (const m of drapeMats) if (m.uniforms && m.uniforms.vex) m.uniforms.vex.value = v;
-  if (FINE.mesh && FINE.mesh.material.uniforms.vex) FINE.mesh.material.uniforms.vex.value = v;
-  if (MID.mesh && MID.mesh.material.uniforms.vex) MID.mesh.material.uniforms.vex.value = v;
-  placeSites();
-}
-
-function standBanner(s, st) {
-  if (!standBar) {
-    standBar = document.createElement('div');
-    standBar.id = 'standBar';
-    document.body.appendChild(standBar);
-    onTap(standBar, ev => { if (ev.target.id === 'stOut') exitStand(); });
-  }
-  standBar.innerHTML =
-    '<b>' + escapeHTML(L.place(s.ko)) + '</b>' +
-    '<span>' + escapeHTML(L.cur === 'en' ? st.en : st.ko) + '</span>' +
-    '<i>' + escapeHTML(L.s('눈높이 1.7 m · 세로 과장 ' + st.vex + '×',
-                          'Eye 1.7 m · relief ×' + st.vex)) + '</i>' +
-    '<button id="stOut">' + escapeHTML(L.s('나가기', 'Leave')) + '</button>';
-  standBar.classList.add('on');
-}
-
-function enterStand(s) {
-  if (!window.__ADMIN) return;          // 아직 시험 중이라 관리자에게만 보인다
-  const st = s && STANDS[s.ko];
-  if (!st) return;
-  const at = st.at || [s.lat, s.lon];
-  // 땅 높이를 아직 다 읽지 않았으면 0 m — 물 속에 서게 된다. 올 때까지 기다린다.
-  if (!gridReady(at[0], at[1])) {
-    if (standWait) clearTimeout(standWait);
-    standWait = setTimeout(() => enterStand(s), 400);
-    return;
-  }
-  if (standWait) { clearTimeout(standWait); standWait = 0; }
-  if (!standOn) {
-    standSave.vex = VEXAG; standSave.eye = eyeIdx; standSave.fpv = fpv;
-    standSave.near = camera.near; standSave.far = camera.far;
-    standSave.tx = cam.tx; standSave.tz = cam.tz;
-    standSave.az = cam.az; standSave.el = cam.el; standSave.dist = cam.dist;
-  }
-  standOn = s;
-  stopFly();
-  setPou(0);
-  setVexag(st.vex);
-  // 눈에서 90 cm 앞부터 그린다. 그 대신 먼 쪽은 260 km 에서 끊는다 —
-  // 눈높이에서는 그보다 멀리 보이는 것이 없다.
-  camera.near = 0.0009; camera.far = 260; camera.updateProjectionMatrix();
-  eyeIdx = 0;
-  cam.tx = worldX(at[1]); cam.tz = worldZ(at[0]);
-  if (st.look) cam.az = azTo(st.look[0], st.look[1]);
-  cam.dist = 4; cam.el = 0.62;
-  if (cardEl) cardEl.classList.remove('on');    // 띠와 카드가 겹치지 않게
-  if (!fpv) setFpv(true); else { syncTravel(); applyCam(); }
-  if (routePts) drawRoute();
-  setPou(0);                       // 그 사이 새로 구워진 재질까지 눕힌다
-  standBanner(s, st);
-}
-
-function exitStand() {
-  if (!standOn) return;
-  standOn = null;
-  setPou(1);
-  setVexag(standSave.vex);
-  camera.near = standSave.near; camera.far = standSave.far;
-  camera.updateProjectionMatrix();
-  eyeIdx = standSave.eye;
-  cam.tx = standSave.tx; cam.tz = standSave.tz;
-  cam.az = standSave.az; cam.el = standSave.el; cam.dist = standSave.dist;
-  if (fpv !== standSave.fpv) setFpv(standSave.fpv);
-  else { syncTravel(); applyCam(); }
-  if (routePts) drawRoute();
-  setPou(1);
-  if (standBar) standBar.classList.remove('on');
-}
-
-const standCSS = document.createElement('style');
-standCSS.textContent =
-  '#standBar{position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:60;' +
-  'display:none;align-items:center;gap:10px;padding:8px 10px 8px 15px;border-radius:16px;' +
-  'background:var(--panel);border:1px solid var(--line);max-width:94vw;' +
-  'backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}' +
-  '#standBar.on{display:flex}' +
-  '#standBar b{font:600 14px/1.2 Georgia,"Apple SD Gothic Neo",serif;color:var(--ink);' +
-  'white-space:nowrap}' +
-  '#standBar span{font:400 12px/1.3 system-ui;color:rgba(255,255,255,.62);' +
-  'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-  '#standBar i{font:400 11px/1.3 system-ui;font-style:normal;color:rgba(253,204,97,.82);' +
-  'white-space:nowrap}' +
-  '#stOut{border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.10);' +
-  'color:rgba(255,255,255,.9);font:600 12px/1 inherit;cursor:pointer;padding:0 12px;' +
-  'height:28px;border-radius:14px}' +
-  '@media (max-width:620px){#standBar span{display:none}}';
-document.head.appendChild(standCSS);
 
 // ── 카메라 몰기 ───────────────────────────────────────────
 function applyCam() {
@@ -4786,7 +4622,6 @@ function showCard(s) {
       }
       if (ev.target.id === 'cX') { cardEl.classList.remove('on'); highlight = null; return; }
       if (ev.target.id === 'cInfo') { openPlace(cardSite); return; }
-      if (ev.target.id === 'cStand') { enterStand(cardSite); return; }
       // 이름을 눌러도 열리게 두되, 그 밖에는 옆 판이 저절로 나오지 않는다
       if (ev.target.closest('#cName')) openPlace(cardSite);
     });
@@ -4804,9 +4639,6 @@ function showCard(s) {
     '<span class="cgap"></span>' +
     // 기록이 있는 곳에만 「정보」를 둔다 — 누구나 알아보게 글자로.
     (eps || note ? '<button id="cInfo">' + escapeHTML(L.s('정보', 'Info')) + '</button>' : '') +
-    // 서 볼 만한 자리로 골라 둔 곳에만, 그것도 관리자에게만 나온다
-    (window.__ADMIN && STANDS[s.ko] ? '<button id="cStand">' +
-      escapeHTML(L.s('이 자리에 서 보기', 'Stand here')) + '</button>' : '') +
     pill('start', L.s('출발', 'Start')) + pill('via', L.s('경유', 'Via')) + pill('end', L.s('도착', 'End')) +
     // 이미 길에 든 곳이면 그 자리에서 뺄 수 있어야 한다 (앱과 같다)
     (here ? '<button id="cMinus" title="' + L.s('길에서 빼기', 'Remove from route') + '">⊖</button>' : '') +
@@ -4834,10 +4666,6 @@ cardCSS.textContent =
   'color:#fdcc61;font:600 12px/1 inherit;cursor:pointer;padding:0 12px;height:30px;' +
   'border-radius:15px;margin-right:2px}' +
   '#cInfo:hover{background:rgba(253,204,97,.22)}' +
-  '#cStand{border:1px solid rgba(255,255,255,.30);background:rgba(255,255,255,.10);' +
-  'color:rgba(255,255,255,.92);font:600 12px/1 inherit;cursor:pointer;padding:0 12px;' +
-  'height:30px;border-radius:15px;margin-right:2px}' +
-  '#cStand:hover{background:rgba(255,255,255,.18)}' +
   '#cName small{display:block;font:400 10.5px/1.4 system-ui;color:rgba(255,255,255,.55)}' +
   '#cName small b{color:rgba(253,204,97,.85);font-weight:400}' +
   '.cgap{flex:1;min-width:8px}' +
