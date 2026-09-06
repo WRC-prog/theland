@@ -1345,14 +1345,23 @@ function dropDetail() {
 }
 
 /** 있던 판을 카메라 밑으로 **밀어 놓는다.**
- *  자리만 바꾸는 것이라 값이 들지 않는다 — 끄는 동안에는 이것만 한다. */
-function slideLayer(L) {
-  if (!L.mesh) return;
+ *
+ *  자리만 바꾸는 것이라 값이 들지 않는다 — 끄는 동안에는 이것만 한다.
+ *
+ *  다만 **아무 데나 놓으면 안 된다.** 높이는 칸 값을 그대로 읽으므로,
+ *  격자가 조금씩 미끄러지면 꼭짓점마다 읽는 칸이 계속 바뀌어 땅 전체가
+ *  물결처럼 꿀렁인다. 그래서 **칸 크기의 배수로 딱딱 끊어** 옮긴다.
+ *  그러면 꼭짓점이 늘 같은 자리(같은 칸)에 떨어져 땅이 미동도 하지 않는다. */
+function placeLayer(L) {
+  if (!L.mesh || !L.sx || !L.sz) return;
   const t = canaanTile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
-  const cx = Math.min(Math.max(cam.tx, tx0 + L.w / 2), tx1 - L.w / 2);
-  const cz = Math.min(Math.max(cam.tz, tz0 + L.d / 2), tz1 - L.d / 2);
+  let cx = Math.min(Math.max(cam.tx, tx0 + L.w / 2), tx1 - L.w / 2);
+  let cz = Math.min(Math.max(cam.tz, tz0 + L.d / 2), tz1 - L.d / 2);
+  const qx = L.w / L.sx, qz = L.d / L.sz;         // 칸 하나의 크기
+  cx = Math.round(cx / qx) * qx;
+  cz = Math.round(cz / qz) * qz;
   L.mesh.position.set(cx, 0, cz);
   L.win = { x: cx - L.w / 2, z: cz - L.d / 2, w: L.w, d: L.d };
 }
@@ -1376,7 +1385,7 @@ function buildLayer(L, half) {
 
   // 칸 수도 크기도 그대로면 밀어 놓기만 하면 된다
   if (L.mesh && sx === L.sx && sz === L.sz
-      && Math.abs(w - L.w) < 0.02 && Math.abs(d - L.d) < 0.02) { slideLayer(L); return; }
+      && Math.abs(w - L.w) < 0.02 && Math.abs(d - L.d) < 0.02) { placeLayer(L); return; }
 
   const g = unitGrid(sx, sz);
   if (!L.mesh) {
@@ -1392,8 +1401,7 @@ function buildLayer(L, half) {
   }
   L.sx = sx; L.sz = sz; L.w = w; L.d = d;
   L.mesh.scale.set(w, 1, d);
-  L.mesh.position.set(x + w / 2, 0, z + d / 2);
-  L.win = { x: x, z: z, w: w, d: d };
+  placeLayer(L);            // 자리는 늘 칸 눈금에 맞춰 놓는다
 }
 
 function makeDetail() {
@@ -1415,7 +1423,7 @@ function updateDetail() {
   if (!baseCanaan || !canaanTex) return;
   if (cam.dist > 200) { dropDetail(); return; }
   if (!FINE.mesh) { detailPend = 1; return; }
-  slideLayer(FINE); slideLayer(MID);
+  placeLayer(FINE); placeLayer(MID);
   syncClips();
   detailPend = 1;                  // 멈추면 눈금에 맞춰 다시 엮는다
 }
