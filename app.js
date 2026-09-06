@@ -2873,7 +2873,18 @@ function scanRow() {
 // 그대로 적혀 있는데도 「표시하기·경로 만들기」를 다시 보려면 글자를
 // 고쳐 넣어야 했다. 이제 칸을 누르기만 하면 된다.
 function reopenHits() {
-  if (qEl.value.trim() && !hitsEl.innerHTML) qEl.dispatchEvent(new Event('input'));
+  if (!qEl.value.trim()) return;
+  // 이미 떠 있으면 다시 훑지 않는다 — 골라 둔 「어느 라마인지」가 지워진다.
+  // 대신 줄만 다시 그려 단추 차림이 지금 길 상태를 따르게 한다.
+  if (hitsEl.innerHTML) refreshScanRow();
+  else qEl.dispatchEvent(new Event('input'));
+}
+
+/** 찾기 줄이 떠 있으면 단추 차림을 **지금 길 상태**에 맞춰 다시 그린다.
+ *  길을 지우면 「경로 만들기」가 도로 나와야 하고, 길을 세우면 사라져야 한다. */
+function refreshScanRow() {
+  if (!hitsEl.innerHTML || !(window.__scan || []).length) return;
+  hitsEl.innerHTML = scanRow() + (window.__hitRest || '');
 }
 qEl.addEventListener('focus', reopenHits);
 qEl.addEventListener('click', reopenHits);
@@ -4271,6 +4282,7 @@ function clearRoute() {
   if (markPins) { scene.remove(markPins); disposeObj(markPins); markPins = null; }
   following = false; followKm = 0;
   highlight = null;
+  setTimeout(refreshScanRow, 0);        // 「경로 만들기」가 도로 나오게
 }
 
 function drawRoute() {
@@ -4293,6 +4305,8 @@ function drawRoute() {
 /** 들름 목록으로 길을 세운다 */
 function setRoute(stops) {
   routeStops = stops.filter(Boolean);
+  // 길이 달라졌으니 찾기 줄의 단추도 따라 바뀌어야 한다
+  setTimeout(refreshScanRow, 0);
   if (routeStops.length < 2) { routePts = null; drawRoute(); buildPins(); return 0; }
   let pts = [];
   for (let i = 0; i < routeStops.length - 1; i++) {
