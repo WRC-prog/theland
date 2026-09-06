@@ -832,11 +832,19 @@ function initGL() {
 }
 
 /** 높이 그림 한 장을 지형 판으로 세운다 */
+// 한 판이 비울 수 있는 네모의 수.
+//
+// 여섯이었다. 그런데 넓은 세계 판은 **가나안 하나 + 지역 판 일곱**을 비워야
+// 한다 — 여덟이다. 그래서 나중에 받은 판 두엇은 비우라는 말을 못 들었고,
+// 620 m 짜리 성긴 배경이 200 m 짜리 지역 판과 같은 자리에서 서로 앞을
+// 다투었다. 지역을 여럿 돌아다닌 뒤에 「화질이 뚝 떨어진다」던 것이 그것이다.
+const NCLIP = 12;
+
 /** 이 판에게 「여기는 그리지 마라」 하고 이르는 네모들 */
 function setClips(mesh, rects) {
   const u = mesh.material.uniforms;
-  const n = Math.min(6, rects.length);
-  for (let i = 0; i < 6; i++) {
+  const n = Math.min(NCLIP, rects.length);
+  for (let i = 0; i < NCLIP; i++) {
     const r = i < n ? rects[i] : null;
     if (r) u.clips.value[i].set(r.x, r.y, r.z, r.w);
     else u.clips.value[i].set(0, 0, -1, -1);
@@ -887,6 +895,11 @@ function flatGrid(w, d, segX, segZ, cx, cz) {
   return g;
 }
 
+/** 판 하나를 얼마나 앞으로 밀어낼까 — 화소가 잘수록 세게 (차례를 지킨다) */
+function tileOff(tile) {
+  return Math.min(7, 490 / Math.max(40, tile.mPerPx || 500));
+}
+
 function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const x0 = worldX(tile.lonMin), x1 = worldX(tile.lonMax);
   const z0 = worldZ(tile.latMax), z1 = worldZ(tile.latMin);   // 위도는 뒤집힌다
@@ -910,8 +923,8 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
     // 네 배로 부풀린 산비탈에서는 그 곱이 걷잡을 수 없이 커져, 능선 뒤에
     // 가려 있어야 할 면이 앞으로 튀어나왔다 — 산 위에 실오라기 같은 조각이
     // 비쳐 보이던 것이 그것이다. 차례는 그대로 두고 크기만 3분의 1로 줄인다.
-    polygonOffsetFactor: -Math.min(7, 490 / Math.max(40, tile.mPerPx || 500)),
-    polygonOffsetUnits: -2,
+    polygonOffsetFactor: -tileOff(tile),
+    polygonOffsetUnits: -2 - 12 * tileOff(tile) / 7,
     uniforms: {
       hmap: { value: tex },
       // 칸 수는 **그림에게 묻는다**. terrain.json 에 적힌 값과 어긋나면
@@ -937,7 +950,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       roadB: { value: roadBnd || new THREE.Vector4(0, 0, 1, 1) },
       roadOn: { value: (roadTex && roadShow) ? 1 : 0 },
       // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
-      clips: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -1, -1)) },
+      clips: { value: Array.from({ length: NCLIP }, () => new THREE.Vector4(0, 0, -1, -1)) },
       nClip: { value: 0 }
     },
     vertexShader: `
@@ -976,7 +989,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       uniform sampler2D roadT;
       uniform vec4 roadB;      // lonMin, latMin, lon폭, lat폭
       uniform float roadOn;
-      uniform vec4 clips[6];
+      uniform vec4 clips[12];
       uniform int nClip;
       uniform vec2 mpp;      // 칸 하나가 덮는 실제 거리 (m) — 동서, 남북
       uniform vec4 geo;      // 기준 경도·위도와 1도의 km
@@ -1086,7 +1099,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       void main(){
         // 더 촘촘한 판이 맡은 자리는 넘기고 그리지 않는다 — 겹치면 서로 파고든다.
         // 지역 판이 하나씩 내려앉을 때마다 비울 네모가 늘어난다.
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 12; i++) {
           if (i < nClip) {
             vec4 c = clips[i];
             if (vWorld.x > c.x && vWorld.x < c.z &&
@@ -1226,6 +1239,22 @@ function applyWorldClips() {
   if (worldMesh) setClips(worldMesh, worldClips);
 }
 
+/** 넓은 세계 판이 비울 네모를 **처음부터 다시** 적는다.
+ *
+ *  예전에는 지역 판이 하나 내려앉을 때마다 목록에 밀어 넣기만 했다. 그런데
+ *  넓은 세계 판이 늦게 세워지면서 목록을 통째로 갈아 치웠기 때문에, 그보다
+ *  먼저 받아 둔 지역 판들은 「비우라」는 말을 잃어버렸다. 그 자리에서는
+ *  620 m 짜리 배경이 200 m 짜리 지역 판과 같은 높이를 놓고 다투었다. */
+function rebuildWorldClips() {
+  worldClips = canaanTile ? [tileRect(canaanTile, SEAM_KM)] : [];
+  for (const [file, m] of regionLoaded) {
+    if (!m || m === 'loading' || m === 'none') continue;
+    const t = REGIONS.find(x => x.file === file);
+    if (t) worldClips.push(tileRect(t, SEAM_KM));
+  }
+  applyWorldClips();
+}
+
 function updateRegions() {
   if (!REGIONS.length) return;
   // 지역 판 하나가 십몇 MB 다. 여섯을 한꺼번에 부르면 폰이 숨을 못 쉰다.
@@ -1259,9 +1288,8 @@ function updateRegions() {
       m.renderOrder = -0.5;                   // 성긴 배경보다 위, 가나안보다 아래
       scene.add(m);
       regionLoaded.set(t.file, m);
-      worldClips.push(tileRect(t, SEAM_KM));
       // 다음 판은 이 판을 다 세운 뒤에 (한 번에 하나씩)
-      applyWorldClips();
+      rebuildWorldClips();
       // 높이 격자는 성기게 — 이천만 화소를 900×900 으로 훑으면 폰이 멎는다
       // 높이 읽기는 수백만 화소를 훑는 일이라, 한 판에 몰아 하면 그만큼 멎는다.
       buildGridAsync(t, tex.image, Math.min(segX, 520), Math.min(segZ, 520));
@@ -1287,7 +1315,10 @@ function clipRect(r) {
 }
 /** 조각 판이 지금 얹혀 있는 판, 그리고 그 판이 본디 지고 있던 비울 네모들 */
 let HOST = null, hostClipped = null;
-function baseClipsOf(m) { return (m && m.userData && m.userData.baseClips) || []; }
+function baseClipsOf(m) {
+  if (m && m === worldMesh) return worldClips;      // 이 목록은 판이 늘 때마다 바뀐다
+  return (m && m.userData && m.userData.baseClips) || [];
+}
 
 /** 겹치는 자리는 **촘촘한 판이 이긴다** — 밑에 깔린 판에게 비우라 이른다 */
 function syncClips() {
@@ -1327,6 +1358,13 @@ function hostAt(x, z) {
     const mpp = (r.lonMax - r.lonMin) * 94600 / Math.max(tx.image.width - 1, 1);
     const score = mpp * (r === FINE.tile ? 0.9 : 1);
     if (!best || score < best.score) best = { tile: r, tex: tx, mesh: m, score: score };
+  }
+  // 지역 판이 없는 데(아라비아·페르시아 같은)는 **넓은 세계 판** 위에 얹는다.
+  // 그 판은 3.9 km 칸으로 세워 두었지만 자료는 620 m 다 — 여섯 곱 아깝다.
+  if (!best && worldMesh && hTexB && hTexB.image && TERRAIN && TERRAIN.tiles[1]) {
+    const t = TERRAIN.tiles[1];
+    if (lon > t.lonMin && lon < t.lonMax && lat > t.latMin && lat < t.latMax)
+      best = { tile: t, tex: hTexB, mesh: worldMesh, score: 620 };
   }
   return best;
 }
@@ -1383,8 +1421,8 @@ function unitGrid(sx, sz) {
 // 뭉개졌다 — 게다가 꼭짓점 사이에 낀 마루는 아예 읽히지 않아 봉우리가 잘려
 // **찌그러져** 보였다. 시점으로 서서 멀리 볼 때가 특히 그랬다. 시점에서는
 // 고운 판이 12 km 밖에 안 되므로 눈에 드는 산이 거의 다 큰 판 몫이었다.
-const FINE = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -9, unit: -8, order: 1,   cap: 1100 };
-const MID  = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -8, unit: -6, order: 0.5, cap: 768 };
+const FINE = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -9, unit: -20, order: 1,   cap: 1100 };
+const MID  = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -8, unit: -17, order: 0.5, cap: 768 };
 const MIDHALF = 70;                    // 가운데 판은 140 km 폭
 
 function dropLayer(L) {
@@ -5284,8 +5322,8 @@ function tick() {
       hTexB = texR; hBoundB = tileBounds(region);
       const m = makeTerrain(region, 1000, 540, texR, canaanClip);
         m.renderOrder = -1;
-        worldMesh = m; worldClips = [canaanClip];
-        applyWorldClips();
+        worldMesh = m;
+        rebuildWorldClips();          // 먼저 받아 둔 지역 판까지 빠짐없이
         scene.add(m);
         buildGridAsync(region, texR.image, 420, 240, () => {
           applyCam();                   // 가나안 밖 지명도 땅 위로 올라온다
