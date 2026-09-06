@@ -905,7 +905,12 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const mat = new THREE.ShaderMaterial({
     // 이음매에서 겹친 자리는 **촘촘한 판이 이긴다**. 화소가 작을수록 앞으로 당긴다.
     polygonOffset: true,
-    polygonOffsetFactor: -Math.min(20, 1400 / Math.max(40, tile.mPerPx || 500)),
+    // 밀어내는 값은 **차례만 지킬 만큼**이면 된다. 예전에는 가나안 판이 -20,
+    // 조각 판이 -26 이었는데, 이 값은 삼각형의 **기울기에 곱해진다.** 높이를
+    // 네 배로 부풀린 산비탈에서는 그 곱이 걷잡을 수 없이 커져, 능선 뒤에
+    // 가려 있어야 할 면이 앞으로 튀어나왔다 — 산 위에 실오라기 같은 조각이
+    // 비쳐 보이던 것이 그것이다. 차례는 그대로 두고 크기만 3분의 1로 줄인다.
+    polygonOffsetFactor: -Math.min(7, 490 / Math.max(40, tile.mPerPx || 500)),
     polygonOffsetUnits: -2,
     uniforms: {
       hmap: { value: tex },
@@ -1378,8 +1383,8 @@ function unitGrid(sx, sz) {
 // 뭉개졌다 — 게다가 꼭짓점 사이에 낀 마루는 아예 읽히지 않아 봉우리가 잘려
 // **찌그러져** 보였다. 시점으로 서서 멀리 볼 때가 특히 그랬다. 시점에서는
 // 고운 판이 12 km 밖에 안 되므로 눈에 드는 산이 거의 다 큰 판 몫이었다.
-const FINE = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -26, order: 1,   cap: 1100 };
-const MID  = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -23, order: 0.5, cap: 768 };
+const FINE = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -9, unit: -8, order: 1,   cap: 1100 };
+const MID  = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -8, unit: -6, order: 0.5, cap: 768 };
 const MIDHALF = 70;                    // 가운데 판은 140 km 폭
 
 function dropLayer(L) {
@@ -1449,7 +1454,7 @@ function buildLayer(L, h, half) {
     // 겹치는 띠에서는 **촘촘한 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
     // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
     L.mesh.material.polygonOffsetFactor = L.off;
-    L.mesh.material.polygonOffsetUnits = -5;
+    L.mesh.material.polygonOffsetUnits = L.unit;
     L.mesh.renderOrder = L.order;
     scene.add(L.mesh);
   } else {
