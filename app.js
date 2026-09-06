@@ -1264,10 +1264,8 @@ function updateRegions() {
 }
 
 let baseCanaan = null, canaanTex = null, canaanTile = null;
-let detailMesh = null, detailWin = null;
-// 지금 엮어 놓은 조각 판의 칸 수와 크기, 그리고 「다시 엮어야 한다」는 표
-let detailSX = 0, detailSZ = 0, detailW = 0, detailD = 0, detailPend = 0;
-let distKey = '', stillAt = 0;
+// 「다시 엮어야 한다」는 표와, 배율이 멎었는지 재는 자리
+let detailPend = 0, distKey = '', stillAt = 0;
 
 // 조각 판이 맡은 자리를 큰 판이 비우되, **딱 맞춰 비우지 않는다.**
 //
@@ -1277,22 +1275,19 @@ let distKey = '', stillAt = 0;
 // 따라다녔다. 지역 판끼리 쓰는 것과 같은 수를 쓴다 — 큰 판이 조각 밑으로
 // 조금 들어가게 비울 네모를 안쪽으로 줄인다.
 const DETAIL_LAP = 0.7;                 // 700 m 겹침
-function setBaseClip(r) {
-  if (!baseCanaan) return;
+function clipRect(r) {
   const m = DETAIL_LAP;
-  setClips(baseCanaan, r
-    ? [new THREE.Vector4(r.x + m, r.z + m, r.x + r.w - m, r.z + r.d - m)]
-    : []);
+  return new THREE.Vector4(r.x + m, r.z + m, r.x + r.w - m, r.z + r.d - m);
+}
+/** 겹치는 자리는 **촘촘한 판이 이긴다** — 밑에 깔린 판에게 비우라 이른다 */
+function syncClips() {
+  if (baseCanaan)
+    setClips(baseCanaan, MID.win ? [clipRect(MID.win)]
+                                 : (FINE.win ? [clipRect(FINE.win)] : []));
+  if (MID.mesh)
+    setClips(MID.mesh, FINE.win ? [clipRect(FINE.win)] : []);
 }
 
-// 조각 판의 격자는 **한 번 엮어 두고 되쓴다.**
-//
-// 예전에는 화면을 조금 끌 때마다 1100×1100 짜리 판을 새로 엮었다. 꼭짓점
-// 백이십만 개와 삼각형 이백사십만 개를 자바스크립트로 짜 맞추는 일이라,
-// 폰에서는 그때마다 3~4십분의 1초씩 화면이 멎었다 — 끌면 뚝뚝 끊기던
-// 까닭이 바로 그것이다. 이제 격자는 **한 변이 1 인 네모** 몇 벌만 엮어
-// 두고, 자리와 크기만 바꿔 끼운다. 높이는 어차피 그림에서 읽으므로
-// 격자가 어디에 놓이든 상관이 없다.
 // 조각 판의 격자는 **한 번 엮어 두고 되쓴다.**
 //
 // 예전에는 화면을 조금 끌 때마다 판을 통째로 새로 엮었다. 꼭짓점 백만 개를
@@ -1311,90 +1306,117 @@ function unitGrid(sx, sz) {
   g = flatGrid(1, 1, sx, sz, 0, 0);
   unitGrids.set(k, g);
   // 격자 하나가 수십 MB 다. 오래 안 쓴 것은 놓아 준다 (쓰고 있는 것만 빼고)
-  for (let n = 0; unitGrids.size > 3 && n < 6; n++) {
+  for (let n = 0; unitGrids.size > 4 && n < 8; n++) {
     const k0 = unitGrids.keys().next().value, v = unitGrids.get(k0);
     unitGrids.delete(k0);
-    if (detailMesh && detailMesh.geometry === v) { unitGrids.set(k0, v); continue; }
+    if ((FINE.mesh && FINE.mesh.geometry === v) ||
+        (MID.mesh  && MID.mesh.geometry  === v)) { unitGrids.set(k0, v); continue; }
     v.dispose();
   }
   return g;
 }
 
-function dropDetail() {
-  if (!detailMesh) return;
-  scene.remove(detailMesh);
-  detailMesh.material.dispose();          // 격자는 되쓰므로 버리지 않는다
-  detailMesh = null; detailWin = null;
-  detailSX = detailSZ = 0; detailW = detailD = 0;
-  setBaseClip(null);
+// 조각 판은 **두 겹**이다.
+//
+//  · 고운 판 — 카메라 바로 밑. 칸은 높이 그림 눈금 그대로(약 95 m).
+//  · 가운데 판 — 140 km 폭, 칸 180 m 남짓.
+//
+// 가운데 판이 없던 때에는 고운 판 바깥이 곧바로 큰 판이었다. 큰 판은 한 칸이
+// 473 m 라, 밑동이 3 km 밖에 안 되는 다볼 산 같은 봉우리가 예닐곱 칸에
+// 뭉개졌다 — 게다가 꼭짓점 사이에 낀 마루는 아예 읽히지 않아 봉우리가 잘려
+// **찌그러져** 보였다. 시점으로 서서 멀리 볼 때가 특히 그랬다. 시점에서는
+// 고운 판이 12 km 밖에 안 되므로 눈에 드는 산이 거의 다 큰 판 몫이었다.
+const FINE = { mesh: null, win: null, sx: 0, sz: 0, w: 0, d: 0, off: -26, order: 1,   cap: 1100 };
+const MID  = { mesh: null, win: null, sx: 0, sz: 0, w: 0, d: 0, off: -23, order: 0.5, cap: 768 };
+const MIDHALF = 70;                    // 가운데 판은 140 km 폭
+
+function dropLayer(L) {
+  if (!L.mesh) return;
+  scene.remove(L.mesh);
+  L.mesh.material.dispose();          // 격자는 되쓰므로 버리지 않는다
+  L.mesh = null; L.win = null;
+  L.sx = L.sz = 0; L.w = L.d = 0;
 }
 
-/** 있던 조각 판을 카메라 밑으로 **밀어 놓는다.**
+function dropDetail() {
+  if (!FINE.mesh && !MID.mesh) return;
+  dropLayer(FINE); dropLayer(MID);
+  syncClips();
+}
+
+/** 있던 판을 카메라 밑으로 **밀어 놓는다.**
  *  자리만 바꾸는 것이라 값이 들지 않는다 — 끄는 동안에는 이것만 한다. */
-function slideDetail() {
-  if (!detailMesh) return;
+function slideLayer(L) {
+  if (!L.mesh) return;
   const t = canaanTile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
-  const w = detailW, d = detailD;
-  const cx = Math.min(Math.max(cam.tx, tx0 + w / 2), tx1 - w / 2);
-  const cz = Math.min(Math.max(cam.tz, tz0 + d / 2), tz1 - d / 2);
-  detailMesh.position.set(cx, 0, cz);
-  detailWin = { x: cx - w / 2, z: cz - d / 2, w: w, d: d };
-  setBaseClip(detailWin);
+  const cx = Math.min(Math.max(cam.tx, tx0 + L.w / 2), tx1 - L.w / 2);
+  const cz = Math.min(Math.max(cam.tz, tz0 + L.d / 2), tz1 - L.d / 2);
+  L.mesh.position.set(cx, 0, cz);
+  L.win = { x: cx - L.w / 2, z: cz - L.d / 2, w: L.w, d: L.d };
 }
 
-/** 조각 판을 다시 엮는다 — **손을 멈춘 뒤에만** 부른다.
+/** 판 한 겹을 다시 엮는다 — **손을 멈춘 뒤에만** 부른다.
  *
- *  칸 크기는 예전과 똑같이 **그림에게 묻는다.** 그림보다 촘촘히 뜨면 높이를
- *  칸 값 그대로 읽는 탓에 매끈한 비탈이 계단이 되고, 성기게 뜨면 각이 진다.
- *  그래서 칸 수는 한 칸도 어림잡지 않는다. */
-function makeDetail() {
-  detailPend = 0;
-  if (!baseCanaan || !canaanTex) return;
-  if (cam.dist > 200) { dropDetail(); return; }   // 멀리서는 큰 판으로 넉넉하다
-
-  const half = Math.max(6, Math.min(70, cam.dist * 1.15));
+ *  고운 판의 칸 크기는 **그림에게 묻는다.** 그림보다 촘촘히 뜨면 높이를 칸 값
+ *  그대로 읽는 탓에 매끈한 비탈이 계단이 되고, 성기게 뜨면 각이 진다. */
+function buildLayer(L, half) {
   const t = canaanTile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
   const x = Math.max(tx0, cam.tx - half), z = Math.max(tz0, cam.tz - half);
   const w = Math.min(tx1, cam.tx + half) - x, d = Math.min(tz1, cam.tz + half) - z;
-  if (w < 2 || d < 2) { dropDetail(); return; }   // 타일 밖이면 그만둔다
+  if (w < 2 || d < 2) { dropLayer(L); return; }
 
   const iw = (canaanTex.image && canaanTex.image.width) || t.w;
   const step = Math.max(25, (t.lonMax - t.lonMin) * 94600 / Math.max(iw - 1, 1));
-  const segX = Math.min(1100, Math.max(80, Math.round(w * 1000 / step)));
-  const segZ = Math.min(1100, Math.max(80, Math.round(d * 1000 / step)));
+  const sx = Math.min(L.cap, Math.max(80, Math.round(w * 1000 / step)));
+  const sz = Math.min(L.cap, Math.max(80, Math.round(d * 1000 / step)));
 
   // 칸 수도 크기도 그대로면 밀어 놓기만 하면 된다
-  if (detailMesh && segX === detailSX && segZ === detailSZ
-      && Math.abs(w - detailW) < 0.02 && Math.abs(d - detailD) < 0.02) { slideDetail(); return; }
+  if (L.mesh && sx === L.sx && sz === L.sz
+      && Math.abs(w - L.w) < 0.02 && Math.abs(d - L.d) < 0.02) { slideLayer(L); return; }
 
-  const g = unitGrid(segX, segZ);
-  if (!detailMesh) {
-    detailMesh = makeTerrain(t, 0, 0, canaanTex, null, { x: x, z: z, w: w, d: d, geo: g });
-    // 겹치는 띠에서는 **조각 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
+  const g = unitGrid(sx, sz);
+  if (!L.mesh) {
+    L.mesh = makeTerrain(t, 0, 0, canaanTex, null, { x: x, z: z, w: w, d: d, geo: g });
+    // 겹치는 띠에서는 **촘촘한 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
     // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
-    detailMesh.material.polygonOffsetFactor = -26;
-    detailMesh.material.polygonOffsetUnits = -5;
-    detailMesh.renderOrder = 1;
-    scene.add(detailMesh);
+    L.mesh.material.polygonOffsetFactor = L.off;
+    L.mesh.material.polygonOffsetUnits = -5;
+    L.mesh.renderOrder = L.order;
+    scene.add(L.mesh);
   } else {
-    detailMesh.geometry = g;
+    L.mesh.geometry = g;
   }
-  detailSX = segX; detailSZ = segZ; detailW = w; detailD = d;
-  detailMesh.scale.set(w, 1, d);
-  detailMesh.position.set(x + w / 2, 0, z + d / 2);
-  detailWin = { x: x, z: z, w: w, d: d };
-  setBaseClip(detailWin);
+  L.sx = sx; L.sz = sz; L.w = w; L.d = d;
+  L.mesh.scale.set(w, 1, d);
+  L.mesh.position.set(x + w / 2, 0, z + d / 2);
+  L.win = { x: x, z: z, w: w, d: d };
+}
+
+function makeDetail() {
+  detailPend = 0;
+  if (!baseCanaan || !canaanTex) return;
+  if (cam.dist > 200) { dropDetail(); return; }   // 멀리서는 큰 판으로 넉넉하다
+  let half = Math.max(6, Math.min(70, cam.dist * 1.15));
+  // 고운 판이 이미 110 km 넘게 덮으면 가운데 판은 없어도 된다.
+  // 거꾸로 가운데 판이 멀리를 맡아 줄 때는 고운 판이 넓을 까닭이 없다 —
+  // 80 km 로 끊어, 두 겹을 합쳐도 꼭짓점 수가 예전 한 겹 때와 비슷하게 둔다.
+  const wantMid = half < 55;
+  if (wantMid) half = Math.min(half, 40);
+  buildLayer(FINE, half);
+  if (wantMid) buildLayer(MID, MIDHALF); else dropLayer(MID);
+  syncClips();
 }
 
 function updateDetail() {
   if (!baseCanaan || !canaanTex) return;
   if (cam.dist > 200) { dropDetail(); return; }
-  if (!detailMesh) { detailPend = 1; return; }
-  slideDetail();
+  if (!FINE.mesh) { detailPend = 1; return; }
+  slideLayer(FINE); slideLayer(MID);
+  syncClips();
   detailPend = 1;                  // 멈추면 눈금에 맞춰 다시 엮는다
 }
 
