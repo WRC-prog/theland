@@ -1472,8 +1472,17 @@ function buildLayer(L, h, half) {
   const t = h.tile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
-  const x = Math.max(tx0, cam.tx - half), z = Math.max(tz0, cam.tz - half);
-  const w = Math.min(tx1, cam.tx + half) - x, d = Math.min(tz1, cam.tz + half) - z;
+  // 조각의 **크기는 판 가장자리에서도 줄이지 않는다.**
+  //
+  // 예전에는 판 밖으로 나가는 만큼 잘라 냈다. 그러면 가장자리로 다가갈수록
+  // 크기가 조금씩 줄고, 칸 크기(크기÷칸 수)도 함께 줄어든다 — 딱딱 끊어
+  // 놓으려고 맞춰 둔 눈금 자체가 미끄러지니 땅이 다시 꿀렁였다. 레바논처럼
+  // 가나안 판의 북쪽 끝을 따라갈 때가 꼭 그랬다.
+  // 이제 크기는 그대로 두고 **판 안으로 밀어 넣는다**(placeLayer 가 한다).
+  const w = Math.min(2 * half, tx1 - tx0);
+  const d = Math.min(2 * half, tz1 - tz0);
+  const x = Math.min(Math.max(cam.tx - w / 2, tx0), tx1 - w);
+  const z = Math.min(Math.max(cam.tz - d / 2, tz0), tz1 - d);
   if (w < 2 || d < 2) { dropLayer(L); return; }
 
   const iw = (h.tex.image && h.tex.image.width) || t.w || 1;
