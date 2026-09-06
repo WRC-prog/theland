@@ -900,8 +900,8 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
   const geo = (win && win.geo) ? win.geo
                                : flatGrid(gw, gd, segX, segZ, gx + gw / 2, gz + gd / 2);
 
-  const iw = (tex.image && tex.image.width)  || tile.w;
-  const ih = (tex.image && tex.image.height) || tile.h;
+  const iw = (tex.image && tex.image.width)  || tile.w || 1;
+  const ih = (tex.image && tex.image.height) || tile.h || 1;
   const mat = new THREE.ShaderMaterial({
     // 이음매에서 겹친 자리는 **촘촘한 판이 이긴다**. 화소가 작을수록 앞으로 당긴다.
     polygonOffset: true,
@@ -1250,6 +1250,7 @@ function updateRegions() {
     }
     loadTexture(qualFile(t.file, t)).catch(() => loadTexture(t.file)).then(tex => {
       const m = makeTerrain(t, segX, segZ, tex, rects);
+      m.userData.baseClips = rects;           // 조각 판이 얹힐 때 여기에 하나 더 붙는다
       m.renderOrder = -0.5;                   // 성긴 배경보다 위, 가나안보다 아래
       scene.add(m);
       regionLoaded.set(t.file, m);
@@ -1279,13 +1280,64 @@ function clipRect(r) {
   const m = DETAIL_LAP;
   return new THREE.Vector4(r.x + m, r.z + m, r.x + r.w - m, r.z + r.d - m);
 }
+/** 조각 판이 지금 얹혀 있는 판, 그리고 그 판이 본디 지고 있던 비울 네모들 */
+let HOST = null, hostClipped = null;
+function baseClipsOf(m) { return (m && m.userData && m.userData.baseClips) || []; }
+
 /** 겹치는 자리는 **촘촘한 판이 이긴다** — 밑에 깔린 판에게 비우라 이른다 */
 function syncClips() {
-  if (baseCanaan)
-    setClips(baseCanaan, MID.win ? [clipRect(MID.win)]
-                                 : (FINE.win ? [clipRect(FINE.win)] : []));
-  if (MID.mesh)
-    setClips(MID.mesh, FINE.win ? [clipRect(FINE.win)] : []);
+  if (hostClipped && hostClipped !== HOST) {
+    setClips(hostClipped, baseClipsOf(hostClipped));   // 떠난 판은 원래대로
+    hostClipped = null;
+  }
+  if (MID.mesh) setClips(MID.mesh, FINE.win ? [clipRect(FINE.win)] : []);
+  if (!HOST) return;
+  const extra = MID.win ? [clipRect(MID.win)] : (FINE.win ? [clipRect(FINE.win)] : []);
+  setClips(HOST, baseClipsOf(HOST).concat(extra));
+  hostClipped = extra.length ? HOST : null;
+}
+
+/** 카메라가 지금 딛고 있는 판.
+ *
+ *  예전에는 조각 판이 **가나안 판에만** 붙어 있었다. 그래서 가나안 밖은
+ *  다가가도 촘촘해지는 것이 없었고, 지역 판을 판마다 800칸으로 세우다 보니
+ *  메소포타미아는 200 m 자료를 1.3 km 칸으로 깎고 있었다 — 가진 것의
+ *  여섯 분의 일만 보여 준 셈이다. 이제 딛고 선 판이 무엇이든 그 위에 얹는다. */
+function hostAt(x, z) {
+  const lat = latOfZ(z), lon = lonOfX(x);
+  const c = canaanTile;
+  if (c && baseCanaan && canaanTex &&
+      lon > c.lonMin && lon < c.lonMax && lat > c.latMin && lat < c.latMax)
+    return { tile: c, tex: canaanTex, mesh: baseCanaan };
+  let best = null;
+  for (const r of REGIONS) {
+    const m = regionLoaded.get(r.file);
+    if (!m || m === 'loading' || m === 'none') continue;
+    if (lon <= r.lonMin || lon >= r.lonMax || lat <= r.latMin || lat >= r.latMax) continue;
+    const tx = m.material && m.material.uniforms && m.material.uniforms.hmap.value;
+    if (!tx || !tx.image) continue;
+    // 화소가 가장 잔 판을 고른다 (판끼리 겹치는 자리가 있다).
+    // 다만 눈금이 엇비슷하면 **쓰던 판을 그대로 쓴다** — 겹친 자리에서 이 판
+    // 저 판 오가면 그때마다 조각을 다시 엮게 된다.
+    const mpp = (r.lonMax - r.lonMin) * 94600 / Math.max(tx.image.width - 1, 1);
+    const score = mpp * (r === FINE.tile ? 0.9 : 1);
+    if (!best || score < best.score) best = { tile: r, tex: tx, mesh: m, score: score };
+  }
+  return best;
+}
+
+/** 조각 판이 다른 판으로 옮겨 갈 때 — 그림과 자리 잣대를 갈아 끼운다 */
+function retileLayer(L, t, tex) {
+  const u = L.mesh.material.uniforms;
+  const x0 = worldX(t.lonMin), z0 = worldZ(t.latMax);
+  const iw = (tex.image && tex.image.width) || t.w || 1;
+  const ih = (tex.image && tex.image.height) || t.h || 1;
+  u.hmap.value = tex;
+  u.texel.value.set(1 / iw, 1 / ih);
+  u.bounds.value.set(x0, z0, worldX(t.lonMax) - x0, worldZ(t.latMin) - z0);
+  u.mpp.value.set((t.lonMax - t.lonMin) * KM_LON * 1000 / Math.max(iw - 1, 1),
+                  (t.latMax - t.latMin) * KM_LAT * 1000 / Math.max(ih - 1, 1));
+  L.tile = t; L.tex = tex;
 }
 
 // 조각 판의 격자는 **한 번 엮어 두고 되쓴다.**
@@ -1326,21 +1378,24 @@ function unitGrid(sx, sz) {
 // 뭉개졌다 — 게다가 꼭짓점 사이에 낀 마루는 아예 읽히지 않아 봉우리가 잘려
 // **찌그러져** 보였다. 시점으로 서서 멀리 볼 때가 특히 그랬다. 시점에서는
 // 고운 판이 12 km 밖에 안 되므로 눈에 드는 산이 거의 다 큰 판 몫이었다.
-const FINE = { mesh: null, win: null, sx: 0, sz: 0, w: 0, d: 0, off: -26, order: 1,   cap: 1100 };
-const MID  = { mesh: null, win: null, sx: 0, sz: 0, w: 0, d: 0, off: -23, order: 0.5, cap: 768 };
+const FINE = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -26, order: 1,   cap: 1100 };
+const MID  = { mesh: null, win: null, tile: null, tex: null, sx: 0, sz: 0, w: 0, d: 0, off: -23, order: 0.5, cap: 768 };
 const MIDHALF = 70;                    // 가운데 판은 140 km 폭
 
 function dropLayer(L) {
   if (!L.mesh) return;
   scene.remove(L.mesh);
+  const i = terrainMats.indexOf(L.mesh.material);
+  if (i >= 0) terrainMats.splice(i, 1);   // 안개·표고를 훑는 목록에 쌓이지 않게
   L.mesh.material.dispose();          // 격자는 되쓰므로 버리지 않는다
-  L.mesh = null; L.win = null;
+  L.mesh = null; L.win = null; L.tile = null; L.tex = null;
   L.sx = L.sz = 0; L.w = L.d = 0;
 }
 
 function dropDetail() {
-  if (!FINE.mesh && !MID.mesh) return;
+  if (!FINE.mesh && !MID.mesh && !hostClipped) return;
   dropLayer(FINE); dropLayer(MID);
+  HOST = null;
   syncClips();
 }
 
@@ -1353,8 +1408,8 @@ function dropDetail() {
  *  물결처럼 꿀렁인다. 그래서 **칸 크기의 배수로 딱딱 끊어** 옮긴다.
  *  그러면 꼭짓점이 늘 같은 자리(같은 칸)에 떨어져 땅이 미동도 하지 않는다. */
 function placeLayer(L) {
-  if (!L.mesh || !L.sx || !L.sz) return;
-  const t = canaanTile;
+  if (!L.mesh || !L.sx || !L.sz || !L.tile) return;
+  const t = L.tile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
   let cx = Math.min(Math.max(cam.tx, tx0 + L.w / 2), tx1 - L.w / 2);
@@ -1370,26 +1425,27 @@ function placeLayer(L) {
  *
  *  고운 판의 칸 크기는 **그림에게 묻는다.** 그림보다 촘촘히 뜨면 높이를 칸 값
  *  그대로 읽는 탓에 매끈한 비탈이 계단이 되고, 성기게 뜨면 각이 진다. */
-function buildLayer(L, half) {
-  const t = canaanTile;
+function buildLayer(L, h, half) {
+  const t = h.tile;
   const tx0 = worldX(t.lonMin), tx1 = worldX(t.lonMax);
   const tz0 = worldZ(t.latMax), tz1 = worldZ(t.latMin);
   const x = Math.max(tx0, cam.tx - half), z = Math.max(tz0, cam.tz - half);
   const w = Math.min(tx1, cam.tx + half) - x, d = Math.min(tz1, cam.tz + half) - z;
   if (w < 2 || d < 2) { dropLayer(L); return; }
 
-  const iw = (canaanTex.image && canaanTex.image.width) || t.w;
+  const iw = (h.tex.image && h.tex.image.width) || t.w || 1;
   const step = Math.max(25, (t.lonMax - t.lonMin) * 94600 / Math.max(iw - 1, 1));
   const sx = Math.min(L.cap, Math.max(80, Math.round(w * 1000 / step)));
   const sz = Math.min(L.cap, Math.max(80, Math.round(d * 1000 / step)));
 
-  // 칸 수도 크기도 그대로면 밀어 놓기만 하면 된다
-  if (L.mesh && sx === L.sx && sz === L.sz
+  // 판도 칸 수도 크기도 그대로면 밀어 놓기만 하면 된다
+  if (L.mesh && L.tile === t && L.tex === h.tex && sx === L.sx && sz === L.sz
       && Math.abs(w - L.w) < 0.02 && Math.abs(d - L.d) < 0.02) { placeLayer(L); return; }
 
   const g = unitGrid(sx, sz);
   if (!L.mesh) {
-    L.mesh = makeTerrain(t, 0, 0, canaanTex, null, { x: x, z: z, w: w, d: d, geo: g });
+    L.mesh = makeTerrain(t, 0, 0, h.tex, null, { x: x, z: z, w: w, d: d, geo: g });
+    L.tile = t; L.tex = h.tex;
     // 겹치는 띠에서는 **촘촘한 판이 이긴다.** 큰 판과 같은 옵셋(-20)이면 서로
     // 파고들어 얼룩이 진다. 길·강이 쓰는 -34 보다는 얕게 두어 차례를 지킨다.
     L.mesh.material.polygonOffsetFactor = L.off;
@@ -1398,6 +1454,7 @@ function buildLayer(L, half) {
     scene.add(L.mesh);
   } else {
     L.mesh.geometry = g;
+    if (L.tile !== t || L.tex !== h.tex) retileLayer(L, t, h.tex);
   }
   L.sx = sx; L.sz = sz; L.w = w; L.d = d;
   L.mesh.scale.set(w, 1, d);
@@ -1407,15 +1464,17 @@ function buildLayer(L, half) {
 function makeDetail() {
   detailPend = 0;
   if (!baseCanaan || !canaanTex) return;
-  if (cam.dist > 200) { dropDetail(); return; }   // 멀리서는 큰 판으로 넉넉하다
+  const h = (cam.dist > 200) ? null : hostAt(cam.tx, cam.tz);
+  if (!h) { dropDetail(); return; }               // 멀리서는 큰 판으로 넉넉하다
+  HOST = h.mesh;
   let half = Math.max(6, Math.min(70, cam.dist * 1.15));
   // 고운 판이 이미 110 km 넘게 덮으면 가운데 판은 없어도 된다.
   // 거꾸로 가운데 판이 멀리를 맡아 줄 때는 고운 판이 넓을 까닭이 없다 —
   // 80 km 로 끊어, 두 겹을 합쳐도 꼭짓점 수가 예전 한 겹 때와 비슷하게 둔다.
   const wantMid = half < 55;
   if (wantMid) half = Math.min(half, 40);
-  buildLayer(FINE, half);
-  if (wantMid) buildLayer(MID, MIDHALF); else dropLayer(MID);
+  buildLayer(FINE, h, half);
+  if (wantMid) buildLayer(MID, h, MIDHALF); else dropLayer(MID);
   syncClips();
 }
 
@@ -1423,6 +1482,7 @@ function updateDetail() {
   if (!baseCanaan || !canaanTex) return;
   if (cam.dist > 200) { dropDetail(); return; }
   if (!FINE.mesh) { detailPend = 1; return; }
+  if (!FINE.tile) return;
   placeLayer(FINE); placeLayer(MID);
   syncClips();
   detailPend = 1;                  // 멈추면 눈금에 맞춰 다시 엮는다
