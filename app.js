@@ -949,6 +949,10 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       roadT: { value: roadTex || BLANK1 },
       roadB: { value: roadBnd || new THREE.Vector4(0, 0, 1, 1) },
       roadOn: { value: (roadTex && roadShow) ? 1 : 0 },
+      // 보고 있는 자리 둘레만 다시 구운 촘촘한 길 그림 (bakeRoadNear)
+      roadT2: { value: roadTexN || BLANK1 },
+      roadB2: { value: roadBndN || new THREE.Vector4(0, 0, 1, 1) },
+      road2On: { value: (roadTexN && roadShow && roadNOn) ? 1 : 0 },
       // 비워 둘 네모들 (x0,z0,x1,z1). nClip 개까지만 본다.
       clips: { value: Array.from({ length: NCLIP }, () => new THREE.Vector4(0, 0, -1, -1)) },
       nClip: { value: 0 }
@@ -989,6 +993,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
       uniform sampler2D roadT;
       uniform vec4 roadB;      // lonMin, latMin, lon폭, lat폭
       uniform float roadOn;
+      uniform sampler2D roadT2;  // 카메라 둘레만 촘촘히 구운 길 그림
+      uniform vec4 roadB2;
+      uniform float road2On;
       uniform vec4 clips[12];
       uniform int nClip;
       uniform vec2 mpp;      // 칸 하나가 덮는 실제 거리 (m) — 동서, 남북
@@ -1171,6 +1178,26 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
             float t0 = mix(0.72, 0.15, clamp((d - 12.0) / 110.0, 0.0, 1.0));
             float core = smoothstep(t0, t0 + 0.22, mk);
             float halo = smoothstep(t0 - 0.18, t0 + 0.02, mk);
+            // 넓은 그림은 한 칸이 139 m 라 길 하나가 한 칸에도 못 미친다.
+            // 보고 있는 자리 둘레만 다시 구운 그림이 있으면 그 쪽이 이긴다 —
+            // 창이 좁을수록 눈금이 잘아져서, 가까이 내려서면 길이 제 너비로
+            // 앉는다. 창 가장자리에서는 넓은 그림으로 스르르 건너간다.
+            float sharp = 0.0;
+            if (road2On > 0.5) {
+              vec2 nu = vec2((lo - roadB2.x) / roadB2.z,
+                             (roadB2.y + roadB2.w - la) / roadB2.w);
+              vec2 ed = min(nu, 1.0 - nu);
+              float w = smoothstep(0.0, 0.05, min(ed.x, ed.y));
+              // 눈에서 1.2 km 안쪽만 제 너비로 앉는다. 그 너머는 예전처럼
+              // 지도의 선이다 — 위에서 내려다보는 모습은 하나도 달라지지 않는다.
+              float wd = w * (1.0 - smoothstep(1.2, 4.0, d));
+              if (wd > 0.002) {
+                float m2 = texture2D(roadT2, nu).r;
+                core = mix(core, smoothstep(0.34, 0.56, m2), wd);
+                halo = mix(halo, smoothstep(0.05, 0.30, m2), wd);
+                sharp = wd;
+              }
+            }
             // 멀리서는 띠가 대신 그린다 — 겹치지 않게 스러진다
             float fade = 1.0 - smoothstep(70.0, 150.0, d);
             // 다져진 길바닥은 풀도 흙도 벗겨진 자리라 **늘 둘레보다 밝다**.
@@ -1179,7 +1206,15 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
             // 두고, 대신 길섶에 머리카락 같은 그늘 한 줄을 둘러 밝은 땅
             // 에서도 테두리가 잡히게 한다.
             vec3 dust = mix(col, vec3(0.76, 0.68, 0.52), 0.60) * 1.10;
-            col = mix(col, col * 0.86, (halo - core) * 0.55 * fade);
+            // 다가서면 다져진 바닥의 결이 드러난다 — 수레바퀴가 눌러 놓은
+            // 자국과 흙알갱이. 1.5 km 밖에서는 보이지 않으니 아른거릴 일이 없다.
+            float gz = sharp * (1.0 - smoothstep(0.40, 2.60, d));
+            if (gz > 0.002) {
+              vec2 gp = fract(vWorld.xz * 0.05) * 20000.0;   // m 눈금 (20 km 마다 되풀이)
+              float gr = vnoise(gp * 0.11) * 0.55 + vnoise(gp * 0.55) * 0.45;
+              dust *= 0.88 + 0.12 * (1.0 - gz) + 0.26 * gr * gz;
+            }
+            col = mix(col, col * mix(0.86, 0.74, sharp), (halo - core) * mix(0.55, 0.85, sharp) * fade);
             col = mix(col, dust, core * 0.90 * fade);
           }
         }
@@ -4389,6 +4424,94 @@ function bakeRoadMask(tile) {
   cv.width = cv.height = 1;                          // 큰 그림판은 놓아 준다
 }
 
+// ── 보고 있는 자리 둘레의 길 그림 ────────────────────────
+//
+// 위의 넓은 그림은 가나안 전체를 2048 칸에 담는다 — 한 칸이 139 m 다.
+// 길 하나가 한 칸에도 못 미치니, 아무리 다듬어도 「위에 그은 선」이지
+// 「길바닥」이 아니다. 결을 넣고 싶어도 넣을 자리가 없다.
+//
+// 그래서 보고 있는 자리 둘레만 따로 한 장 더 굽는다. 창은 눈에서 멀수록
+// 넓어지고 가까울수록 좁아지니, 눈금도 따라 잘아진다 —
+//   · 500 m 위 → 창 3 km → 한 칸 1.5 m → 7 m 길이 다섯 칸
+//   · 3 km 위  → 창 12 km → 한 칸 6 m  → 길은 다시 한 줄
+// 창 밖은 예전대로 넓은 그림이 맡는다. 새 도형이 없으니 깊이도 건드리지
+// 않는다. 그림 한 장을 다시 굽는 것뿐이다.
+const ROADN = 2048;
+let roadTexN = null, roadBndN = null, roadCanN = null;
+let roadNAt = null, roadNKm = 0, roadNOn = false;
+
+/** 눈이 땅에서 떠 있는 높이(m) — 시점 보기면 눈높이, 아니면 카메라 높이 */
+function eyeUpM() {
+  return fpv ? eyeM_() : cam.dist * Math.sin(cam.el) * 1000;
+}
+
+function bakeRoadNear(force) {
+  if (!roadShow || !ROADS.length) return;
+  // 900 m 위에서는 길이 지도의 선이어야 읽힌다 — 그 위로는 예전 그대로 둔다.
+  const up = eyeUpM();
+  if (up > 900) { if (roadNOn) { roadNOn = false; syncRoadMask(); } return; }
+  const km = Math.max(2, Math.min(12, up * 0.012 + 1.5));
+  const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
+  // 창의 1/5 을 넘게 움직였거나 창 크기가 눈에 띄게 달라졌을 때만 다시 굽는다
+  if (!force && roadNAt && roadNKm && roadNOn) {
+    const moved = Math.hypot((lon - roadNAt.lon) * KM_LON, (lat - roadNAt.lat) * KM_LAT);
+    if (moved < km * 0.20 && Math.abs(Math.log(km / roadNKm)) < 0.25) return;
+  }
+  if (!roadCanN) {
+    roadCanN = document.createElement('canvas');
+    roadCanN.width = roadCanN.height = ROADN;
+  }
+  const g = roadCanN.getContext('2d');
+  if (!g) return;
+  const dLon = km / KM_LON / 2, dLat = km / KM_LAT / 2;
+  const lo0 = lon - dLon, la0 = lat - dLat;
+  const mpp = km * 1000 / ROADN;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, ROADN, ROADN);
+  const px = l => (l - lo0) / (2 * dLon) * ROADN;
+  const py = l => (la0 + 2 * dLat - l) / (2 * dLat) * ROADN;
+  const near = p => p[1] > lo0 - 2 * dLon && p[1] < lo0 + 4 * dLon &&
+                    p[0] > la0 - 2 * dLat && p[0] < la0 + 4 * dLat;
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  g.globalCompositeOperation = 'lighter';
+  // 두 번 — 바깥 한 번은 길섶, 안쪽 한 번은 다져진 바닥
+  for (const [mul, a] of [[2.6, 0.24], [1.0, 1.0]]) {
+    g.strokeStyle = 'rgba(255,255,255,' + a + ')';
+    for (const r of ROADS) {
+      if (!r.pts || r.pts.length < 2) continue;
+      // 옛 큰길 7 m, 그 밖은 5 m. 다만 한 칸 밑으로는 가늘어지지 않게 —
+      // 그 밑으로 내려가면 길이 아예 스러진다.
+      const real = r.rank === 0 ? 9 : 6;
+      g.lineWidth = Math.max(real / mpp, 1.7) * mul;
+      let prev = null, on = false;
+      g.beginPath();
+      for (let i = 0; i < r.pts.length; i++) {
+        const p = r.pts[i];
+        if (near(p) || (prev && near(prev))) {
+          if (!on && prev) { g.moveTo(px(prev[1]), py(prev[0])); on = true; }
+          if (on) g.lineTo(px(p[1]), py(p[0]));
+          else { g.moveTo(px(p[1]), py(p[0])); on = true; }
+        } else on = false;
+        prev = p;
+      }
+      g.stroke();
+    }
+  }
+  g.globalCompositeOperation = 'source-over';
+  if (!roadTexN) {
+    roadTexN = new THREE.CanvasTexture(roadCanN);
+    roadTexN.minFilter = roadTexN.magFilter = THREE.LinearFilter;
+    roadTexN.wrapS = roadTexN.wrapT = THREE.ClampToEdgeWrapping;
+    roadTexN.generateMipmaps = false;
+  }
+  roadTexN.needsUpdate = true;
+  roadBndN = new THREE.Vector4(lo0, la0, 2 * dLon, 2 * dLat);
+  roadNAt = { lat: lat, lon: lon }; roadNKm = km; roadNOn = true;
+  syncRoadMask();
+}
+
 /** 땅에 새긴 길을 켜고 끈다 (지형 판이 새로 서면 스스로 따라온다) */
 function syncRoadMask() {
   for (const m of terrainMats) {
@@ -4396,6 +4519,11 @@ function syncRoadMask() {
     m.uniforms.roadT.value = roadTex || BLANK1;
     if (roadBnd) m.uniforms.roadB.value = roadBnd;
     m.uniforms.roadOn.value = (roadTex && roadShow) ? 1 : 0;
+    if (m.uniforms.roadT2) {
+      m.uniforms.roadT2.value = roadTexN || BLANK1;
+      if (roadBndN) m.uniforms.roadB2.value = roadBndN;
+      m.uniforms.road2On.value = (roadTexN && roadShow && roadNOn) ? 1 : 0;
+    }
   }
   for (const m of drapeMats) {
     // 길에만 걸어야 한다 — 강·경로까지 스러뜨리면 안 된다
@@ -4415,6 +4543,7 @@ function toggleRoads() {
   }
   bakeRoadMask(canaanTile);
   roadShow = true;
+  bakeRoadNear(true);
   roadsMesh = new THREE.Group();
   for (const r of ROADS) {
     // 땅을 촘촘히 따라가야 능선에서 파먹히지 않는다 (110 m 마디)
@@ -5325,6 +5454,7 @@ function tick() {
     const n = performance.now();
     if (k !== distKey) { distKey = k; stillAt = n; }
     else if (detailPend && !downAt && !flyAnim && n - stillAt > 170) makeDetail();
+    if (roadShow && !downAt && !flyAnim && n - stillAt > 200) bakeRoadNear(false);
   }
   renderer.render(scene, camera);
   updateLabels();
