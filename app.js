@@ -1190,7 +1190,9 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
               float w = smoothstep(0.0, 0.05, min(ed.x, ed.y));
               // 눈에서 1.2 km 안쪽만 제 너비로 앉는다. 그 너머는 예전처럼
               // 지도의 선이다 — 위에서 내려다보는 모습은 하나도 달라지지 않는다.
-              float wd = w * (1.0 - smoothstep(1.2, 4.0, d));
+              // 넘어가는 거리는 창 크기에서 뽑는다 — 창 밖에서 뚝 끊기지 않게
+              float half2 = roadB2.z * geo.z * 0.5;      // 창 반지름(km)
+              float wd = w * (1.0 - smoothstep(half2 * 0.45, half2 * 0.92, d));
               if (wd > 0.002) {
                 float m2 = texture2D(roadT2, nu).r;
                 core = mix(core, smoothstep(0.34, 0.56, m2), wd);
@@ -4447,10 +4449,13 @@ function eyeUpM() {
 
 function bakeRoadNear(force) {
   if (!roadShow || !ROADS.length) return;
-  // 900 m 위에서는 길이 지도의 선이어야 읽힌다 — 그 위로는 예전 그대로 둔다.
+  // 3 km 위에서는 길이 지도의 선이어야 읽힌다 — 그 위로는 예전 그대로 둔다.
   const up = eyeUpM();
-  if (up > 900) { if (roadNOn) { roadNOn = false; syncRoadMask(); } return; }
-  const km = Math.max(2, Math.min(12, up * 0.012 + 1.5));
+  if (up > 3000) { if (roadNOn) { roadNOn = false; syncRoadMask(); } return; }
+  // 창은 **보이는 땅**을 덮어야 한다. 처음에 눈높이에 맞춰 2 km 로 잡았더니,
+  // 눈높이 40 m 에서도 20 km 앞까지 보이는 통에 보이는 길이 죄다 창 밖이었다 —
+  // 그래서 아무것도 달라지지 않았다. 창을 넓히고 눈금을 양보한다.
+  const km = Math.max(30, Math.min(60, up * 0.008 + 30));
   const lat = latOfZ(cam.tz), lon = lonOfX(cam.tx);
   // 창의 1/5 을 넘게 움직였거나 창 크기가 눈에 띄게 달라졌을 때만 다시 굽는다
   if (!force && roadNAt && roadNKm && roadNOn) {
@@ -4484,7 +4489,7 @@ function bakeRoadNear(force) {
       // 옛 큰길 7 m, 그 밖은 5 m. 다만 한 칸 밑으로는 가늘어지지 않게 —
       // 그 밑으로 내려가면 길이 아예 스러진다.
       const real = r.rank === 0 ? 9 : 6;
-      g.lineWidth = Math.max(real / mpp, 1.7) * mul;
+      g.lineWidth = Math.max(real / mpp, 1.15) * mul;
       let prev = null, on = false;
       g.beginPath();
       for (let i = 0; i < r.pts.length; i++) {
