@@ -1750,6 +1750,13 @@ function syncLayers() {
 }
 syncLayers();
 
+// 이름표 크기가 등급마다 못박혀 있어, 작은 성읍은 코앞까지 당겨도
+// 13.5 px 그대로였다. 두 가지를 함께 고친다.
+//   · 바탕 크기를 한 단계 올린다 (성읍 13.5 → 15.5)
+//   · 그 위에 보는 거리를 따라 조금 더 자라게 한다 (최대 1.42 곱)
+// 55 km 밖은 곱이 1 이라 지도처럼 볼 때는 바탕 크기 그대로다.
+// 이미 큰 이름은 절반만 따라간다 — 안 그러면 혼자 화면을 차지한다.
+let labZ = 0;
 function updateLabels() {
   const v = new THREE.Vector3();
   const cand = [];
@@ -1761,6 +1768,12 @@ function updateLabels() {
   //     그래서 눕혀 볼수록 짧게 끊는다.
   const tilt = Math.max(0, Math.min(1, (cam.el - 0.12) / 0.55));   // 0 눕힘 · 1 내려다봄
   const reach = (cam.dist * 2.6 + 50) * (0.55 + 0.45 * tilt);
+  const lz = Math.min(1.42, Math.max(1, Math.pow(55 / Math.max(cam.dist, 1), 0.26)));
+  if (Math.abs(lz - labZ) > 0.004) {
+    labZ = lz;
+    labelRoot.style.setProperty('--labz', lz.toFixed(3));
+    labelRoot.style.setProperty('--labzb', (1 + (lz - 1) * 0.45).toFixed(3));
+  }
   for (const s of SITES) {
     if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
     if (s.rank === 10 && cam.dist > 12) continue;        // 성 안의 것은 가까이서만
@@ -1807,7 +1820,8 @@ function updateLabels() {
   // 저 멀리서는 수십 km 가 몇십 픽셀로 눌리기 때문이다. 그래서 **멀리 있는
   // 이름일수록 넓은 자리를 차지하게** 한다 — 가까운 데는 그대로 촘촘하고,
   // 먼 데만 성기게 솎인다.
-  const cell = 34, cols = Math.ceil(innerWidth / cell);
+  // 글씨가 커진 만큼 자리도 넓게 잡는다 — 안 그러면 서로 겹친다
+  const cell = Math.round(34 * (0.68 + 0.42 * lz)), cols = Math.ceil(innerWidth / cell);
   const taken = new Set();
   const out = [];
   const near = Math.max(cam.dist, 1);
@@ -1815,7 +1829,9 @@ function updateLabels() {
     // 골라 둔 곳은 한도에도 자리다툼에도 걸리지 않는다
     if (!c.keep && out.length >= labelCap()) continue;
     const far = c.d / near;                       // 보는 거리의 몇 곱쯤 멀리 있는가
-    let sp = c.keep ? 1 : (far > 2.5 ? 3 : far > 1.5 ? 2 : 1);
+    // 골라 둔 곳은 자리다툼에 걸리지 않지만, 자리는 넉넉히 **차지한다** —
+    // 그러지 않으면 이웃한 이름이 그 위로 겹쳐 올라와 둘 다 못 읽는다.
+    let sp = c.keep ? 3 : (far > 2.5 ? 3 : far > 1.5 ? 2 : 1);
     if (c.key) sp = Math.max(sp, 2);              // 큰 글씨에는 그만한 자리를
     const cx = Math.floor(c.sx / cell), cy = Math.floor(c.sy / cell);
     let hit = false;
@@ -5132,13 +5148,13 @@ labSizeCSS.textContent =
   // 이름표끼리 서로 밀어내 지도가 성겨 보인다)
   '.lab{touch-action:manipulation}' +
   // 상 — 큰 도시
-  '.lab.r0{font-size:19px;font-weight:800;letter-spacing:.01em}' +
-  '.lab.r1{font-size:15.5px;font-weight:700}' +
+  '.lab.r0{font-size:calc(20.5px * var(--labzb,1));font-weight:800;letter-spacing:.01em}' +
+  '.lab.r1{font-size:calc(17px * var(--labzb,1));font-weight:700}' +
   // 중 — 성읍
-  '.lab.r2{font-size:13.5px;font-weight:600}' +
-  '.lab.r3{font-size:12.5px;font-weight:500}' +
+  '.lab.r2{font-size:calc(15.5px * var(--labz,1));font-weight:600}' +
+  '.lab.r3{font-size:calc(14.5px * var(--labz,1));font-weight:500}' +
   // 지형(산·산맥·골짜기)은 도시만큼 큰 것들이다. 작게 쓰면 안 보인다.
-  '.lab.r4,.lab.r8,.lab.r9{font-size:17px;font-weight:700;letter-spacing:.05em}' +
+  '.lab.r4,.lab.r8,.lab.r9{font-size:calc(18px * var(--labzb,1));font-weight:700;letter-spacing:.05em}' +
   // 지파와 민족은 넓은 땅 이름 — 더 크고 옅게
   // 지파·민족 — 앱과 같이 색 판 위의 큰 흰 글씨. 넓은 땅의 이름이라
   // 성읍 이름보다 커야 한다.
@@ -5147,7 +5163,7 @@ labSizeCSS.textContent =
   'padding:5px 15px;border-radius:17px;border:2px solid rgba(255,255,255,.55);' +
   'text-shadow:0 2px 5px rgba(0,0,0,.6);box-shadow:0 3px 12px rgba(0,0,0,.42)}' +
   '@media (max-width:560px){.lab.r5,.lab.r6,.lab.r11,.lab.r12{font-size:18px;padding:4px 12px}}' +
-  '.lab.r7{font-size:16px;font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
+  '.lab.r7{font-size:calc(17px * var(--labzb,1));font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
   // 도피 도시 — 붉은 세모 (여호수아 20장의 여섯 성)
   '.lab.refuge i{width:0;height:0;border-radius:0;background:none;' +
   'border-left:5px solid transparent;border-right:5px solid transparent;' +
@@ -5158,16 +5174,22 @@ labSizeCSS.textContent =
   'text-shadow:0 1px 4px #000,0 0 14px #000,0 0 22px rgba(0,0,0,.9)}' +
   // 주요 도시 — 앱은 큰 도시를 1.55 곱으로 키운다. 이름만 보아도 어디쯤인지
   // 잡히는 곳들이라, 성읍 수백 개 사이에서 확실히 도드라져야 한다.
-  '.lab.r0.key{font-size:29px;font-weight:800;letter-spacing:.02em;' +
+  '.lab.r0.key{font-size:calc(30px * var(--labzb,1));font-weight:800;letter-spacing:.02em;' +
   'text-shadow:0 2px 5px #000,0 0 12px #000,0 0 20px rgba(0,0,0,.85)}' +
-  '.lab.r1.key{font-size:24px;font-weight:800;' +
+  '.lab.r1.key{font-size:calc(25.5px * var(--labzb,1));font-weight:800;' +
   'text-shadow:0 2px 5px #000,0 0 12px #000,0 0 18px rgba(0,0,0,.8)}' +
   '.lab.key i{width:7px;height:7px;border-radius:4px;margin-right:6px}' +
-  '.lab.r4.bigr{font-size:23px}' +
-  '@media (max-width:560px){.lab.r0{font-size:16px}.lab.r1{font-size:13.5px}' +
-  '.lab.r2{font-size:12px}.lab.r3{font-size:11px}' +
-  '.lab.r4,.lab.r8,.lab.r9{font-size:13px}.lab.r5,.lab.r6{font-size:14.5px}' +
-  '.lab.r0.key{font-size:25px}.lab.r1.key{font-size:21px}.lab.r4.bigr{font-size:17.5px}}' +
+  '.lab.r4.bigr{font-size:calc(24px * var(--labzb,1))}' +
+  '@media (max-width:560px){' +
+  '.lab.r0{font-size:calc(17px * var(--labzb,1))}' +
+  '.lab.r1{font-size:calc(14.5px * var(--labzb,1))}' +
+  '.lab.r2{font-size:calc(13.5px * var(--labz,1))}' +
+  '.lab.r3{font-size:calc(12.5px * var(--labz,1))}' +
+  '.lab.r4,.lab.r8,.lab.r9{font-size:calc(14px * var(--labzb,1))}' +
+  '.lab.r5,.lab.r6{font-size:14.5px}' +
+  '.lab.r0.key{font-size:calc(26px * var(--labzb,1))}' +
+  '.lab.r1.key{font-size:calc(22px * var(--labzb,1))}' +
+  '.lab.r4.bigr{font-size:calc(18.5px * var(--labzb,1))}}' +
   // 표시해 둔 곳 — 앱 MarkOverlay 와 같은 모양.
   // 검은 알약에 그 곳 색의 테두리, 왼쪽에 번호 알, 오른쪽에 흰 이름.
   '.lab.mark{display:inline-flex;align-items:center;gap:8px;' +
@@ -5211,7 +5233,11 @@ uiBigCSS.textContent =
   'body.uibig #live b{font-size:18px}' +
   'body.uibig #live .dot{width:11px;height:11px;border-radius:6px}' +
   'body.uibig #card{padding:12px 16px;gap:8px}' +
-  'body.uibig #cName b{font-size:16.5px}' +
+  // 카드에서 「크게」에 걸린 것은 출발·경유·도착뿐이었다. 곳 이름과
+  // 「정보」는 그대로 남아, 한 줄에 큰 것과 작은 것이 섞여 있었다.
+  'body.uibig #cName{font-size:18px}' +
+  'body.uibig #cName small{font-size:12.5px}' +
+  'body.uibig #cInfo{font-size:14px;height:40px;padding:0 15px;border-radius:20px}' +
   'body.uibig .cslot{font-size:14px;height:40px;padding:0 14px}' +
   'body.uibig #cX,body.uibig #cMinus{width:42px;height:42px;font-size:22px}' +
   'body.uibig #cMinus{font-size:25px}' +
@@ -5233,6 +5259,36 @@ uiBigCSS.textContent =
     'body.uibig #joy{width:112px;height:112px}' +
   '}';
 document.head.appendChild(uiBigCSS);
+
+// ── 남은 이름표와 옆 판 글씨 ──────────────────────────────
+//
+// · 등급표가 따로 없는 이름표(성 안의 것)도 함께 자라게 한다.
+// · 옆 판 설명이 13 px 이라 읽기에 부담이었다. 한 단계 올리고,
+//   툴바를 「크게」로 두면 여기도 함께 커지게 한다.
+const textCSS = document.createElement('style');
+textCSS.textContent =
+  '.lab{font-size:calc(13.5px * var(--labz,1))}' +
+  '@media (max-width:560px){.lab{font-size:calc(12px * var(--labz,1))}}' +
+  '#ph h2{font-size:18px}' +
+  '#ph small{font-size:12.5px}' +
+  '.ep h3{font-size:15.5px;margin:0 0 6px}' +
+  '.ep p{font-size:14.5px;line-height:1.62}' +
+  '.ep .ref{font-size:12.5px}' +
+  '.ep .era{font-size:11.5px}' +
+  '.note{font-size:14.5px;line-height:1.62}' +
+  '.note em{font-size:12.5px}' +
+  'body.uibig #panel{width:min(460px,94vw)}' +
+  'body.uibig #ph h2{font-size:21px}' +
+  'body.uibig #ph small{font-size:14px}' +
+  'body.uibig #pb{padding:6px 18px 32px}' +
+  'body.uibig .ep{padding:15px 0}' +
+  'body.uibig .ep h3{font-size:18px;margin:0 0 7px}' +
+  'body.uibig .ep p{font-size:17px;line-height:1.66}' +
+  'body.uibig .ep .ref{font-size:14.5px}' +
+  'body.uibig .ep .era{font-size:13px;padding:2px 8px}' +
+  'body.uibig .note{font-size:17px;line-height:1.66;padding:15px 0}' +
+  'body.uibig .note em{font-size:14.5px}';
+document.head.appendChild(textCSS);
 applyUIBig();
 
 /** 화면 아래에 잠깐 뜨는 알림 */
