@@ -1752,10 +1752,11 @@ syncLayers();
 
 // 이름표 크기가 등급마다 못박혀 있어, 작은 성읍은 코앞까지 당겨도
 // 13.5 px 그대로였다. 두 가지를 함께 고친다.
-//   · 바탕 크기를 한 단계 올린다 (성읍 13.5 → 15.5)
-//   · 그 위에 보는 거리를 따라 조금 더 자라게 한다 (최대 1.42 곱)
+//   · 바탕 크기를 두 단계 올린다 (성읍 13.5 → 17.5)
+//   · 그 위에 보는 거리를 따라 더 자라게 한다 (최대 1.55 곱 — 13 km 안쪽)
 // 55 km 밖은 곱이 1 이라 지도처럼 볼 때는 바탕 크기 그대로다.
-// 이미 큰 이름은 절반만 따라간다 — 안 그러면 혼자 화면을 차지한다.
+// 이미 큰 이름은 조금 덜 따라간다(0.72) — 안 그러면 혼자 화면을 차지한다.
+// 다만 성읍이 커진 만큼은 따라와야 큰 곳과 작은 곳의 차례가 뒤집히지 않는다.
 let labZ = 0;
 function updateLabels() {
   const v = new THREE.Vector3();
@@ -1768,11 +1769,11 @@ function updateLabels() {
   //     그래서 눕혀 볼수록 짧게 끊는다.
   const tilt = Math.max(0, Math.min(1, (cam.el - 0.12) / 0.55));   // 0 눕힘 · 1 내려다봄
   const reach = (cam.dist * 2.6 + 50) * (0.55 + 0.45 * tilt);
-  const lz = Math.min(1.42, Math.max(1, Math.pow(55 / Math.max(cam.dist, 1), 0.26)));
+  const lz = Math.min(1.55, Math.max(1, Math.pow(55 / Math.max(cam.dist, 1), 0.30)));
   if (Math.abs(lz - labZ) > 0.004) {
     labZ = lz;
     labelRoot.style.setProperty('--labz', lz.toFixed(3));
-    labelRoot.style.setProperty('--labzb', (1 + (lz - 1) * 0.45).toFixed(3));
+    labelRoot.style.setProperty('--labzb', (1 + (lz - 1) * 0.72).toFixed(3));
   }
   for (const s of SITES) {
     if (rankOn[s.rank] === false) continue;              // 꺼 둔 갈래
@@ -1821,7 +1822,7 @@ function updateLabels() {
   // 이름일수록 넓은 자리를 차지하게** 한다 — 가까운 데는 그대로 촘촘하고,
   // 먼 데만 성기게 솎인다.
   // 글씨가 커진 만큼 자리도 넓게 잡는다 — 안 그러면 서로 겹친다
-  const cell = Math.round(34 * (0.68 + 0.42 * lz)), cols = Math.ceil(innerWidth / cell);
+  const cell = Math.round(36 * (0.66 + 0.44 * lz)), cols = Math.ceil(innerWidth / cell);
   const taken = new Set();
   const out = [];
   const near = Math.max(cam.dist, 1);
@@ -5148,13 +5149,13 @@ labSizeCSS.textContent =
   // 이름표끼리 서로 밀어내 지도가 성겨 보인다)
   '.lab{touch-action:manipulation}' +
   // 상 — 큰 도시
-  '.lab.r0{font-size:calc(20.5px * var(--labzb,1));font-weight:800;letter-spacing:.01em}' +
-  '.lab.r1{font-size:calc(17px * var(--labzb,1));font-weight:700}' +
+  '.lab.r0{font-size:calc(22px * var(--labzb,1));font-weight:800;letter-spacing:.01em}' +
+  '.lab.r1{font-size:calc(19.5px * var(--labzb,1));font-weight:700}' +
   // 중 — 성읍
-  '.lab.r2{font-size:calc(15.5px * var(--labz,1));font-weight:600}' +
-  '.lab.r3{font-size:calc(14.5px * var(--labz,1));font-weight:500}' +
+  '.lab.r2{font-size:calc(17.5px * var(--labz,1));font-weight:600}' +
+  '.lab.r3{font-size:calc(16.5px * var(--labz,1));font-weight:500}' +
   // 지형(산·산맥·골짜기)은 도시만큼 큰 것들이다. 작게 쓰면 안 보인다.
-  '.lab.r4,.lab.r8,.lab.r9{font-size:calc(18px * var(--labzb,1));font-weight:700;letter-spacing:.05em}' +
+  '.lab.r4,.lab.r8,.lab.r9{font-size:calc(19px * var(--labzb,1));font-weight:700;letter-spacing:.05em}' +
   // 지파와 민족은 넓은 땅 이름 — 더 크고 옅게
   // 지파·민족 — 앱과 같이 색 판 위의 큰 흰 글씨. 넓은 땅의 이름이라
   // 성읍 이름보다 커야 한다.
@@ -5163,7 +5164,7 @@ labSizeCSS.textContent =
   'padding:5px 15px;border-radius:17px;border:2px solid rgba(255,255,255,.55);' +
   'text-shadow:0 2px 5px rgba(0,0,0,.6);box-shadow:0 3px 12px rgba(0,0,0,.42)}' +
   '@media (max-width:560px){.lab.r5,.lab.r6,.lab.r11,.lab.r12{font-size:18px;padding:4px 12px}}' +
-  '.lab.r7{font-size:calc(17px * var(--labzb,1));font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
+  '.lab.r7{font-size:calc(18px * var(--labzb,1));font-weight:700;color:#b6d9ea;letter-spacing:.06em}' +
   // 도피 도시 — 붉은 세모 (여호수아 20장의 여섯 성)
   '.lab.refuge i{width:0;height:0;border-radius:0;background:none;' +
   'border-left:5px solid transparent;border-right:5px solid transparent;' +
@@ -5174,22 +5175,22 @@ labSizeCSS.textContent =
   'text-shadow:0 1px 4px #000,0 0 14px #000,0 0 22px rgba(0,0,0,.9)}' +
   // 주요 도시 — 앱은 큰 도시를 1.55 곱으로 키운다. 이름만 보아도 어디쯤인지
   // 잡히는 곳들이라, 성읍 수백 개 사이에서 확실히 도드라져야 한다.
-  '.lab.r0.key{font-size:calc(30px * var(--labzb,1));font-weight:800;letter-spacing:.02em;' +
+  '.lab.r0.key{font-size:calc(31px * var(--labzb,1));font-weight:800;letter-spacing:.02em;' +
   'text-shadow:0 2px 5px #000,0 0 12px #000,0 0 20px rgba(0,0,0,.85)}' +
-  '.lab.r1.key{font-size:calc(25.5px * var(--labzb,1));font-weight:800;' +
+  '.lab.r1.key{font-size:calc(27px * var(--labzb,1));font-weight:800;' +
   'text-shadow:0 2px 5px #000,0 0 12px #000,0 0 18px rgba(0,0,0,.8)}' +
   '.lab.key i{width:7px;height:7px;border-radius:4px;margin-right:6px}' +
-  '.lab.r4.bigr{font-size:calc(24px * var(--labzb,1))}' +
+  '.lab.r4.bigr{font-size:calc(25px * var(--labzb,1))}' +
   '@media (max-width:560px){' +
-  '.lab.r0{font-size:calc(17px * var(--labzb,1))}' +
-  '.lab.r1{font-size:calc(14.5px * var(--labzb,1))}' +
-  '.lab.r2{font-size:calc(13.5px * var(--labz,1))}' +
-  '.lab.r3{font-size:calc(12.5px * var(--labz,1))}' +
-  '.lab.r4,.lab.r8,.lab.r9{font-size:calc(14px * var(--labzb,1))}' +
+  '.lab.r0{font-size:calc(18px * var(--labzb,1))}' +
+  '.lab.r1{font-size:calc(16.5px * var(--labzb,1))}' +
+  '.lab.r2{font-size:calc(15px * var(--labz,1))}' +
+  '.lab.r3{font-size:calc(14px * var(--labz,1))}' +
+  '.lab.r4,.lab.r8,.lab.r9{font-size:calc(15px * var(--labzb,1))}' +
   '.lab.r5,.lab.r6{font-size:14.5px}' +
-  '.lab.r0.key{font-size:calc(26px * var(--labzb,1))}' +
-  '.lab.r1.key{font-size:calc(22px * var(--labzb,1))}' +
-  '.lab.r4.bigr{font-size:calc(18.5px * var(--labzb,1))}}' +
+  '.lab.r0.key{font-size:calc(27px * var(--labzb,1))}' +
+  '.lab.r1.key{font-size:calc(23px * var(--labzb,1))}' +
+  '.lab.r4.bigr{font-size:calc(19.5px * var(--labzb,1))}}' +
   // 표시해 둔 곳 — 앱 MarkOverlay 와 같은 모양.
   // 검은 알약에 그 곳 색의 테두리, 왼쪽에 번호 알, 오른쪽에 흰 이름.
   '.lab.mark{display:inline-flex;align-items:center;gap:8px;' +
@@ -5267,8 +5268,8 @@ document.head.appendChild(uiBigCSS);
 //   툴바를 「크게」로 두면 여기도 함께 커지게 한다.
 const textCSS = document.createElement('style');
 textCSS.textContent =
-  '.lab{font-size:calc(13.5px * var(--labz,1))}' +
-  '@media (max-width:560px){.lab{font-size:calc(12px * var(--labz,1))}}' +
+  '.lab{font-size:calc(15.5px * var(--labz,1))}' +
+  '@media (max-width:560px){.lab{font-size:calc(13.5px * var(--labz,1))}}' +
   '#ph h2{font-size:18px}' +
   '#ph small{font-size:12.5px}' +
   '.ep h3{font-size:15.5px;margin:0 0 6px}' +
