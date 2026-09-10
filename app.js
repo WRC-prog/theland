@@ -4147,8 +4147,8 @@ function syncStrBtn() {
       updateStopMarks(); updateLabels();
       if (panelIsRoutes && panel.classList.contains('open')) openRoutes();
       toast(STRAIGHT
-        ? L.s('곧게 이었습니다 · ' + Math.round(km) + ' km', 'Straight · ' + Math.round(km) + ' km')
-        : L.s('옛길을 따릅니다 · ' + Math.round(km) + ' km', 'Along the roads · ' + Math.round(km) + ' km'));
+        ? L.s('직선 경로 · ' + Math.round(km) + ' km', 'Straight · ' + Math.round(km) + ' km')
+        : L.s('길 우선 · ' + Math.round(km) + ' km', 'Roads first · ' + Math.round(km) + ' km'));
     });
     actsEl().appendChild(strBtn);
     const st = document.createElement('style');
@@ -4165,8 +4165,8 @@ function syncStrBtn() {
   if (sig === strBtn._sig) return;
   strBtn._sig = sig;
   strBtn.className = has ? 'on' : '';
-  strBtn.textContent = STRAIGHT ? L.s('\u21ba 옛길로 잇기', '\u21ba Along roads')
-                                : L.s('\u2500 곧게 잇기', '\u2500 Straight line');
+  strBtn.textContent = STRAIGHT ? L.s('\u21ba 길 우선', '\u21ba Roads first')
+                                : L.s('\u2500 직선 경로', '\u2500 Straight line');
 }
 
 // 표시해 둔 곳도 한 번에 물릴 수 있어야 한다. 성구 한 줄에서 열댓 곳을
@@ -5134,7 +5134,7 @@ function openRoutes() {
   panelSite = null;
   document.getElementById('pTitle').textContent = L.s('길', 'Journeys');
   document.getElementById('pSub').textContent = STRAIGHT
-    ? L.s('곧게 잇습니다', 'Straight lines')
+    ? L.s('직선 경로로 잇습니다', 'Straight lines')
     : L.s('옛길을 따라갑니다', 'Along the ancient roads');
   const b = document.getElementById('pb');
   const stops = planStops();
