@@ -17,10 +17,29 @@ const bootErr = document.getElementById('booterr');
 function say(t, pct) { bootMsg.textContent = t; if (pct != null) bootBar.style.width = pct + '%'; }
 function die(t, e) {
   boot.classList.add('err');
+  boot.style.display = '';
   boot.querySelector('h1').textContent = '열지 못했습니다';
   bootMsg.textContent = t;
-  bootErr.textContent = e ? (e.message || String(e)) : '';
+  // 무엇이 막았는지 한 줄로 같이 적는다. 기기를 손에 쥐고 있지 않아도
+  // 이 한 줄만 보면 그림판(WebGL)이 죽어 있었는지 아닌지 가려진다.
+  bootErr.textContent = (e ? (e.message || String(e)) : '') + '\n' + glReport();
   console.error(t, e);
+}
+function glReport() {
+  try {
+    var g = (typeof renderer !== 'undefined' && renderer) ? renderer.getContext() : null;
+    var s = 'GL ' + ((typeof GLPLAN !== 'undefined' && GLPLAN) ? GLPLAN : '—');
+    if (g) {
+      s += (typeof WebGL2RenderingContext !== 'undefined' &&
+            g instanceof WebGL2RenderingContext) ? ' · 2' : ' · 1';
+      if (g.isContextLost()) s += ' · 잃음';
+      s += ' · 최대 ' + g.getParameter(g.MAX_TEXTURE_SIZE);
+    } else {
+      s += ' · 없음';
+    }
+    return s + ' · ' + Math.round(innerWidth) + '×' + Math.round(innerHeight) +
+           '@' + (Math.round((devicePixelRatio || 1) * 10) / 10);
+  } catch (e) { return 'GL ?'; }
 }
 window.addEventListener('error', ev => { if (boot.style.display !== 'none') die('스크립트 오류', ev.error || ev); });
 
@@ -767,7 +786,7 @@ function placeSites() {
 }
 
 // ── 그림 판 ───────────────────────────────────────────────
-let renderer, scene, camera, labelRoot;
+let renderer, scene, camera, labelRoot, GLPLAN = '';
 const SKY = 0x9dc0dc, HAZE = 0xc6d6e0;      // 하늘빛과 지평선 안개
 
 // 안개는 가까이서 볼 때 거리를 느끼게 하는 장치다. 그런데 짙기를 고정해 두면
@@ -809,14 +828,67 @@ function skyTexture() {
 }
 const cam = { tx: 0, tz: 0, dist: 260, az: 0.35, el: 0.62 };   // 도는 카메라
 
+// 오래된 기기에서는 그림판을 내어 주고도 정작 쓸 수 없는 일이 있다.
+// 아이패드 프로 10.5(iOS 17)에서 「shaderSource … must be an instance of
+// WebGLShader」로 멎었다 — 받아 든 그림판이 이미 죽어 있었다는 뜻이다.
+// 그래서 만들자마자 한 번 두들겨 보고, 대답이 없으면 조건을 낮춰 다시 만든다.
+function glUsable(r) {
+  try {
+    const g = r && r.getContext();
+    if (!g || g.isContextLost()) return false;
+    const sh = g.createShader(g.VERTEX_SHADER);   // 죽은 그림판은 여기서 빈손을 준다
+    if (!sh) return false;
+    g.deleteShader(sh);
+    return true;
+  } catch (e) { return false; }
+}
+function makeRenderer(plan) {
+  if (!plan.gl1) return new THREE.WebGLRenderer(plan);
+  // 한 세대 아래(WebGL1)로 내려간다. 세대가 낮은 기기에서는 위 칸이 열리기만
+  // 하고 쓰이지 않는 일이 있는데, 내려오면 대개 그대로 돌아간다.
+  const cv = document.createElement('canvas');
+  const a = { antialias: false, alpha: false, depth: true, stencil: false,
+              preserveDrawingBuffer: false, powerPreference: 'default' };
+  const ctx = cv.getContext('webgl', a) || cv.getContext('experimental-webgl', a);
+  if (!ctx) return null;
+  return new THREE.WebGLRenderer({ canvas: cv, context: ctx, antialias: false });
+}
 function initGL() {
   if (!window.THREE) throw new Error('three.js 를 불러오지 못했습니다 (인터넷 차단?)');
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const plans = [
+    { name: '2·고른',  antialias: true,  powerPreference: 'high-performance' },
+    { name: '2·거친',  antialias: false, powerPreference: 'high-performance' },
+    { name: '2·기본',  antialias: false },
+    { name: '1',       gl1: true }
+  ];
+  let why = '';
+  for (const p of plans) {
+    let r = null;
+    try { r = makeRenderer(p); }
+    catch (e) { why = e && (e.message || String(e)); r = null; }
+    if (r && glUsable(r)) { renderer = r; GLPLAN = p.name; break; }
+    if (r) {
+      try { r.forceContextLoss(); } catch (e) {}
+      try { r.dispose(); } catch (e) {}
+    }
+    renderer = null;
+  }
+  if (!renderer) {
+    throw new Error('이 기기에서는 3차원 그림판을 열 수 없었습니다' + (why ? ' — ' + why : ''));
+  }
+  // 물러선 판에서는 화면 배율도 한 칸 낮춘다 — 자리가 모자라 죽은 것일 수 있다
+  renderer.setPixelRatio(Math.min(devicePixelRatio, GLPLAN === '2·고른' ? 2 : 1.5));
   renderer.setSize(innerWidth, innerHeight);
   // 캄캄한 밤하늘 대신 **낮**. 먼 데는 옅은 안개로 스러지게 한다.
   renderer.setClearColor(SKY);
   document.body.insertBefore(renderer.domElement, document.getElementById('labels'));
+  // 돌아가던 중에 기기가 그림판을 거두어 갈 수 있다(자리 부족·다른 탭).
+  // 그때 아무 말 없이 멎어 버리면 고장 난 줄 안다.
+  renderer.domElement.addEventListener('webglcontextlost', ev => {
+    ev.preventDefault();
+    die('그림판을 잃었습니다 — 다른 탭을 닫고 다시 열어 보십시오',
+        new Error('webglcontextlost'));
+  });
 
   scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(HAZE, 0.0009);
