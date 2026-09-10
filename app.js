@@ -3084,6 +3084,16 @@ function applyLang() {
 let ROADS = [], PRESETS = [], WAYS = [];
 let roadNet = null;                       // {n:[{lat,lon,e:[[j,km]…]}]}
 let routeMesh = null, roadsMesh = null, routeStops = [], routePts = null, ribbonDist = 0;
+// ── 곧게 가기 ──────────────────────────────────────────────
+//
+// 「경로 만들기」는 옛길을 따라 굽이굽이 잇는다. 그런데 두 곳이 서로 얼마나
+// 떨어져 있고 어느 쪽에 있는지만 보고 싶을 때가 있다 — 그때는 곧은 줄 하나가
+// 낫다. 한 번 고른 방식은 다음에 만드는 길에도 그대로 이어진다.
+//
+// 성경 여정 목록에서 뜬 길에는 걸지 않는다(routeFixed). 뱃길을 곧게 이으면
+// 배가 뭍을 가로질러 가 버린다.
+let STRAIGHT = false, routeFixed = false;
+try { STRAIGHT = localStorage.getItem('theland.straight') === '1'; } catch (e) {}
 
 function kmLL(a, b) {
   return Math.hypot((a.lon - b.lon) * KM_LON, (a.lat - b.lat) * KM_LAT);
@@ -4122,6 +4132,43 @@ function syncClrBtn() {
   clrBtn.textContent = L.s('\u2715 경로 지우기', '\u2715 Clear route');
 }
 
+// 곧게 갈지 옛길로 갈지 — 길이 서 있을 때 그 자리에서 바꾼다.
+// 카메라는 건드리지 않는다. 보던 자리 그대로 줄만 바뀌어야 견주어진다.
+let strBtn = null;
+function syncStrBtn() {
+  if (!strBtn) {
+    strBtn = document.createElement('button');
+    strBtn.id = 'strBtn';
+    onTap(strBtn, () => {
+      if (routeStops.length < 2 || routeFixed) return;
+      STRAIGHT = !STRAIGHT;
+      try { localStorage.setItem('theland.straight', STRAIGHT ? '1' : '0'); } catch (e) {}
+      const km = setRoute(routeStops);        // 같은 곳들을 다른 방식으로 다시
+      updateStopMarks(); updateLabels();
+      if (panelIsRoutes && panel.classList.contains('open')) openRoutes();
+      toast(STRAIGHT
+        ? L.s('곧게 이었습니다 · ' + Math.round(km) + ' km', 'Straight · ' + Math.round(km) + ' km')
+        : L.s('옛길을 따릅니다 · ' + Math.round(km) + ' km', 'Along the roads · ' + Math.round(km) + ' km'));
+    });
+    actsEl().appendChild(strBtn);
+    const st = document.createElement('style');
+    st.textContent =
+      '#strBtn{display:none;border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
+      'padding:0 15px;height:42px;border-radius:21px;background:rgba(20,20,24,.9);' +
+      'color:#bcd8ec;font:700 13px/1 inherit}' +
+      '#strBtn.on{display:block}' +
+      '@media (max-width:560px){#strBtn{padding:0 12px;font-size:12.5px}}';
+    document.head.appendChild(st);
+  }
+  const has = routeStops.length >= 2 && !routeFixed;
+  const sig = (has ? 1 : 0) + '|' + (STRAIGHT ? 1 : 0) + '|' + L.cur;
+  if (sig === strBtn._sig) return;
+  strBtn._sig = sig;
+  strBtn.className = has ? 'on' : '';
+  strBtn.textContent = STRAIGHT ? L.s('\u21ba 옛길로 잇기', '\u21ba Along roads')
+                                : L.s('\u2500 곧게 잇기', '\u2500 Straight line');
+}
+
 // 표시해 둔 곳도 한 번에 물릴 수 있어야 한다. 성구 한 줄에서 열댓 곳을
 // 표시해 놓고 하나씩 다시 눌러 끄는 것은 일이 아니라 벌이다.
 let mkClrBtn = null;
@@ -4189,6 +4236,7 @@ function updateStopMarks() {
   syncGoBtn();
   syncSpeedBtn();
   syncClrBtn();
+  syncStrBtn();
   syncMarkClr();
   syncRunner();
   const need = routeStops.length;
@@ -4367,7 +4415,7 @@ function stepFollow() {
 
 function clearRoute() {
   if (routeMesh) { scene.remove(routeMesh); disposeObj(routeMesh); }
-  routeMesh = null; routePts = null; routeStops = [];
+  routeMesh = null; routePts = null; routeStops = []; routeFixed = false;
   if (markPins) { scene.remove(markPins); disposeObj(markPins); markPins = null; }
   following = false; followKm = 0;
   highlight = null;
@@ -4391,15 +4439,22 @@ function drawRoute() {
   scene.add(routeMesh);
 }
 
-/** 들름 목록으로 길을 세운다 */
-function setRoute(stops) {
+/** 들름 목록으로 길을 세운다.
+ *  opt.fixed 면 「곧게」를 걸지 않는다 — 성경 여정은 늘 제 굽이대로. */
+function setRoute(stops, opt) {
   routeStops = stops.filter(Boolean);
+  routeFixed = !!(opt && opt.fixed);
   // 길이 달라졌으니 찾기 줄의 단추도 따라 바뀌어야 한다
   setTimeout(refreshScanRow, 0);
   if (routeStops.length < 2) { routePts = null; drawRoute(); buildPins(); return 0; }
+  const straight = STRAIGHT && !routeFixed;
   let pts = [];
   for (let i = 0; i < routeStops.length - 1; i++) {
-    const seg = smoothPath(roadPath(routeStops[i], routeStops[i + 1]), 0.15);
+    const a = routeStops[i], b = routeStops[i + 1];
+    // 곧게 이어도 땅에서 띄우지는 않는다 — 옛길과 같은 간격(0.15 km)으로
+    // 점을 촘촘히 박아 두면 언덕과 골짜기를 그대로 타고 넘는다.
+    const seg = straight ? densify([a, b], 0.15)
+                         : smoothPath(roadPath(a, b), 0.15);
     pts = pts.concat(i ? seg.slice(1) : seg);
   }
   routePts = pts;
@@ -5078,7 +5133,9 @@ function openRoutes() {
   panelIsRoutes = true;
   panelSite = null;
   document.getElementById('pTitle').textContent = L.s('길', 'Journeys');
-  document.getElementById('pSub').textContent = L.s('옛길을 따라갑니다', 'Along the ancient roads');
+  document.getElementById('pSub').textContent = STRAIGHT
+    ? L.s('곧게 잇습니다', 'Straight lines')
+    : L.s('옛길을 따라갑니다', 'Along the ancient roads');
   const b = document.getElementById('pb');
   const stops = planStops();
   let h = '<div class="note"><em>' + escapeHTML(L.s('내가 짠 길', 'Your own route')) + '</em>';
@@ -5156,7 +5213,7 @@ onTap(document.getElementById('pb'), ev => {
       }
     }
     following = false; followKm = 0;
-    const km = setRoute(stops.map(n => siteByName.get(n)).filter(Boolean));
+    const km = setRoute(stops.map(n => siteByName.get(n)).filter(Boolean), { fixed: true });
     frameRoute();
     openRoutes();
     document.getElementById('pSub').textContent =
@@ -5167,7 +5224,7 @@ onTap(document.getElementById('pb'), ev => {
   if (j) {
     const p = PRESETS[+j.dataset.j];
     following = false; followKm = 0;
-    const km = setRoute(p.stops.map(n => siteByName.get(n)).filter(Boolean));
+    const km = setRoute(p.stops.map(n => siteByName.get(n)).filter(Boolean), { fixed: true });
     frameRoute();
     openRoutes();
     document.getElementById('pSub').textContent =
