@@ -5792,7 +5792,8 @@ const RD = {
   edit: false, zoom: 1, snap: 1,  // 시트 단계 (0 손잡이만 · 1 절반 · 2 전체)
   key: '', saveT: 0, wide: 0.5,
   un: [], re: [], typeT: 0,       // 되돌리기 밑천
-  pen: '0', stroke: null          // 형광펜 — 지금 색, 긋고 있는 붓질
+  pen: '0', stroke: null,         // 형광펜 — 지금 색, 긋고 있는 붓질
+  qrange: null                    // 담아 온 글에서 긁어 둔 자리
 };
 
 function rdPhone() { return innerWidth < 700; }
@@ -5886,7 +5887,7 @@ function rdClean(html) {
 function rdBlockOf(node) {
   let el = node && node.nodeType === 3 ? node.parentElement : node;
   if (!el || !RD.doc.contains(el)) return null;
-  const blk = el.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,tr,figure,.rmemo,.rlink');
+  const blk = el.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,tr,figure,.rmemo,.rlink,.rquote');
   if (blk && RD.doc.contains(blk) && blk !== RD.doc) return blk;
   // 문단 표가 아예 없는 글이면 판의 바로 아래 자식까지 올라간다
   while (el && el.parentElement && el.parentElement !== RD.doc) el = el.parentElement;
@@ -6090,6 +6091,20 @@ function rdStyle() {
     '#rdrDoc .rmemo .mb{padding:9px 11px;min-height:44px;font:400 14px/1.6 inherit;outline:none}' +
     '#rdrDoc .rmemo.fold .mb{display:none}' +
     '#rdrDoc .rmemo.drag{opacity:.45}' +
+    // 담아 온 글에서 떠 온 대목. 메모와 헷갈리지 않게 왼쪽에 굵은 기둥을 세운다.
+    '#rdrDoc .rquote{display:block;margin:13px 0;border-radius:10px;overflow:hidden;' +
+      'border:1px solid rgba(31,95,136,.4);border-left:4px solid #1f5f88;background:#eef4f8}' +
+    '#rdrDoc .rquote .qh{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 8px;' +
+      'background:rgba(31,95,136,.12);font:600 11px/1.3 inherit;color:#2b5a7a}' +
+    '#rdrDoc .rquote .qh .qg{cursor:grab;font-size:13px;line-height:1}' +
+    '#rdrDoc .rquote .qh u{flex:1;text-decoration:none;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap}' +
+    '#rdrDoc .rquote .qh button{border:1px solid rgba(31,95,136,.4);background:none;' +
+      'color:#1f5f88;font:700 10.5px/1 inherit;padding:4px 7px;border-radius:10px;cursor:pointer}' +
+    '#rdrDoc .rquote .qb{padding:9px 12px;font:400 14px/1.68 inherit;color:#1c2126;outline:none}' +
+    '#rdrDoc .rquote .qb p{margin:0 0 6px}' +
+    '#rdrDoc .rquote.fold .qb{display:none}' +
+    '#rdrDoc .rquote.drag{opacity:.45}' +
     '#rdrDoc .rdrop{display:block;height:2px;margin:6px 0;background:#c98a1e;border-radius:1px}' +
     // 긁으면 뜨는 팝업
     // 색을 떠다니는 팝업에 두었더니 기기가 띄우는 「복사 · 붙여넣기」 띠와
@@ -6787,6 +6802,74 @@ function rdLinkAsk(href, walled) {
   return no;
 }
 
+/** 담아 온 글에서 긁은 대목을 **링크 상자 바로 밑에** 세운다.
+ *
+ *  읽다가 「이 대목」 하고 긁으면, 그 자리에서 글 속으로 내려앉는다.
+ *  링크 상자는 접거나 지워도 인용한 대목은 글에 남는다. */
+function rdQuote(box, href) {
+  const lc = box.querySelector('.lc');
+  if (!lc) { toast(L.s('먼저 내용을 담아 두세요', 'Paste the content first')); return; }
+  const sel = getSelection();
+  let r = null;
+  if (sel && !sel.isCollapsed && sel.rangeCount && lc.contains(sel.getRangeAt(0).commonAncestorContainer))
+    r = sel.getRangeAt(0);
+  else if (RD.qrange && lc.contains(RD.qrange.commonAncestorContainer)) r = RD.qrange;
+  if (!r) { toast(L.s('인용할 대목을 먼저 긁으세요', 'Select the part to quote first')); return; }
+  const tmp = document.createElement('div');
+  tmp.appendChild(r.cloneContents());
+  const html = rdClean(tmp.innerHTML);
+  if (!html.replace(/<[^>]*>/g, '').trim()) return;
+  rdPush();
+  let host = '';
+  try { host = new URL(href, location.href).host; } catch (e) {}
+  const q = document.createElement('div');
+  q.className = 'rquote';
+  q.contentEditable = 'false';
+  q.innerHTML =
+    '<div class="qh"><span class="qg">\u2059</span><u></u>' +
+    '<button data-q="fold"></button><button data-q="x">\u2715</button></div>' +
+    '<div class="qb" contenteditable="true"></div>';
+  q.querySelector('.qh u').textContent = host || L.s('인용', 'Quote');
+  q.querySelector('.qb').innerHTML = html;
+  rdQuoteLabel(q);
+  box.after(q);
+  RD.qrange = null;
+  try { getSelection().removeAllRanges(); } catch (e) {}
+  rdSaveNow();
+  try { q.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+}
+
+function rdQuoteLabel(q) {
+  const f = q.querySelector('[data-q="fold"]');
+  if (f) f.textContent = q.classList.contains('fold') ? L.s('펴기', 'Open') : L.s('접기', 'Fold');
+}
+
+/** 오려 둔 것을 곧바로 읽어 온다.
+ *  사파리·크롬은 손가락으로 누른 그 순간에만 오림판을 내준다(물어보고 준다).
+ *  안 되면 손으로 붙여 넣는 자리를 편다 — 어느 쪽이든 길은 열려 있다. */
+async function rdPasteNow(box, href) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.read) {
+      const items = await navigator.clipboard.read();
+      let html = '', text = '';
+      for (const it of items) {
+        if (!html && it.types.indexOf('text/html') >= 0)
+          html = await (await it.getType('text/html')).text();
+        if (!text && it.types.indexOf('text/plain') >= 0)
+          text = await (await it.getType('text/plain')).text();
+      }
+      const clean = html ? rdClean(html) : (text ? rdEscape(text) : '');
+      if (clean.replace(/<[^>]*>/g, '').trim()) {
+        try { localStorage.setItem(rdLinkKey(href), clean); } catch (e) {}
+        rdLinkFill(box, href);
+        toast(L.s('링크 내용을 담았습니다', 'Saved'));
+        return;
+      }
+    }
+  } catch (e) {}
+  rdLinkPaste(box, href);
+}
+
 /** 붙여 넣을 자리를 편다 */
 function rdLinkPaste(box, href) {
   const lb = box.querySelector('.lb');
@@ -6877,7 +6960,8 @@ function rdOpenLink(href, a) {
     // 빠져나갈 문과 손수 담는 문은 늘 열어 둔다
     '<div class="lf" contenteditable="false"><u></u>' +
     '<a class="lnew" target="_blank" rel="noopener noreferrer"></a>' +
-    '<button data-l="paste"></button></div>';
+    '<button data-l="paste"></button>' +
+    '<button data-l="quote"></button></div>';
   box.querySelector('.lh u').textContent = host;
   box.querySelector('.lf u').textContent = L.s('안 보이면', 'Blank?');
   box.querySelectorAll('a.lnew').forEach(x => { x.href = href; });
@@ -6885,6 +6969,7 @@ function rdOpenLink(href, a) {
   box.querySelector('.lf a.lnew').textContent = L.s('새 창에서 열기', 'Open in a new tab');
   box.querySelector('.lf [data-l="paste"]').textContent =
     rdLinkSaved(href) ? L.s('다시 붙여 넣기', 'Replace') : L.s('내용 붙여 넣기', 'Paste it here');
+  box.querySelector('.lf [data-l="quote"]').textContent = L.s('인용', 'Quote');
   rdFoldLabel(box);
   if (blk) blk.after(box); else RD.doc.appendChild(box);
   rdLinkFill(box, href);
@@ -6915,7 +7000,8 @@ function rdNeed(src) {
 function rdCleanClone() {
   const c = RD.doc.cloneNode(true);
   c.querySelectorAll('.rlink,.rgo,.rmemo .mh,#rdrTb,#rdrPop').forEach(x => x.remove());
-  c.querySelectorAll('.rverse .vh button,.rverse .vh a.lnew').forEach(x => x.remove());
+  c.querySelectorAll('.rverse .vh button,.rverse .vh a.lnew,.rquote .qh button').forEach(x => x.remove());
+  c.querySelectorAll('.rquote').forEach(x => x.classList.remove('fold'));
   c.querySelectorAll('.rmemo').forEach(x => x.classList.remove('fold'));
   c.querySelectorAll('[contenteditable]').forEach(x => x.removeAttribute('contenteditable'));
   return c;
@@ -7121,9 +7207,20 @@ function rdBind() {
 
   // 지명 · 링크 · 메모 손잡이
   RD.doc.addEventListener('pointerdown', e => {
-    const g = e.target.closest('.rmemo .mg');
-    if (g) { rdDragMemo(g.closest('.rmemo'), e); return; }
+    const g = e.target.closest('.rmemo .mg,.rquote .qg');
+    if (g) { rdDragMemo(g.closest('.rmemo,.rquote'), e); return; }
   });
+  // 담아 온 글에서 긁은 자리는 따로 챙겨 둔다 — 「인용」을 누르는 사이
+  // 손가락이 닿아 자리가 풀려 버리는 일이 잦다.
+  RD.doc.addEventListener('pointerup', () => setTimeout(() => {
+    const s = getSelection();
+    if (s && !s.isCollapsed && s.rangeCount) {
+      const r = s.getRangeAt(0);
+      const lc = r.commonAncestorContainer.parentElement &&
+                 r.commonAncestorContainer.parentElement.closest('.rlink .lc');
+      if (lc) RD.qrange = r.cloneRange();
+    }
+  }, 30));
   RD.doc.addEventListener('click', e => {
     // 진짜 링크는 손대지 않는다 — 그대로 열리게 둔다
     if (e.target.closest('a.lnew')) return;
@@ -7135,11 +7232,19 @@ function rdBind() {
       if (x === 'x') box.remove();
       else if (x === 'paste') {
         box.classList.remove('fold'); rdFoldLabel(box);
-        rdLinkPaste(box, hf);
+        rdPasteNow(box, hf);
         const pb = box.querySelector('.lf [data-l="paste"]');
         if (pb) pb.textContent = L.s('다시 붙여 넣기', 'Replace');
       }
+      else if (x === 'quote') rdQuote(box, hf);
       else { box.classList.toggle('fold'); rdFoldLabel(box); }
+      return;
+    }
+    const qb = e.target.closest('.rquote [data-q]');
+    if (qb) {
+      const q = qb.closest('.rquote');
+      if (qb.dataset.q === 'x') { rdPush(); q.remove(); rdSaveNow(); }
+      else { q.classList.toggle('fold'); rdQuoteLabel(q); rdSaveNow(); }
       return;
     }
     const vb2 = e.target.closest('.rverse [data-v]');
