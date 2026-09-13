@@ -5984,7 +5984,17 @@ function rdStyle() {
     '#rdrGrp>*{flex:0 0 auto}' +
     '#rdrBar button:disabled{opacity:.32;cursor:default}' +
     // 형광펜 모드 — 그으면 칠해진다. 위아래로 쓸면 여전히 글이 넘어간다.
-    'body.rdrpen #rdrDoc{touch-action:pan-y;cursor:crosshair}' +
+    // 펜 모드 — 그으면 칠해진다. 위아래로 쓸면 여전히 글이 넘어간다.
+    // 긋는 동안 글자를 고르는 손짓(선택·돋보기)은 쉬게 한다 — 붓질이 곧 선택이다.
+    // 담아 온 글(.rlink)만은 예외 — 거기서는 긁어서 「인용」해야 한다.
+    'body.rdrpen #rdrDoc{touch-action:pan-y;cursor:crosshair;' +
+      '-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}' +
+    'body.rdrpen #rdrDoc .rlink{-webkit-user-select:text;user-select:text}' +
+    // 붓질 미리보기 — 손을 따라 번지는 색 (CSS Highlight API)
+    '::highlight(rdpen){background-color:var(--pen,#ffe066);color:inherit}' +
+    '#rdrDoc.penu::highlight(rdpen){background-color:transparent;text-decoration:underline;' +
+      'text-decoration-thickness:2px;text-underline-offset:2px}' +
+    '#rdrDoc.penx::highlight(rdpen){background-color:rgba(0,0,0,.16);text-decoration:line-through}' +
     'body.rdrpen #rdrHl{background:#f2b64c;border-color:transparent;color:#231702}' +
     '#rdrTb b.sel{outline:2px solid #fff;outline-offset:2px}' +
     '#rdrBar button{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);' +
@@ -6874,6 +6884,27 @@ async function rdPasteNow(box, href) {
   rdLinkPaste(box, href);
 }
 
+/** 판 자리에 겹쳐 앉는 창을 하나 띄운다.
+ *
+ *  틀(iframe) 안에서는 그 사이트가 스스로 그리기를 멈춘다 — 남의 집 틀에는
+ *  자기 쿠키가 안 들어오기 때문이다. 그래서 틀 대신 **첫째 집 창**을 판이
+ *  있던 자리에 같은 크기로 띄운다. 이름을 같이 쓰므로 다음 링크는 같은
+ *  창에서 이어 열린다. 휴대폰은 창을 따로 못 띄우니 새 탭이 된다. */
+function rdOpenWin(href) {
+  try {
+    const r = RD.el ? RD.el.getBoundingClientRect() : null;
+    const chrome = Math.max(0, (window.outerHeight || 0) - innerHeight);
+    const w = r ? Math.max(360, Math.round(r.width)) : 640;
+    const h = r ? Math.max(480, Math.round(r.height)) : 800;
+    const left = Math.round((window.screenX || 0) + (r ? r.left : 200));
+    const top = Math.round((window.screenY || 0) + chrome + (r ? r.top : 60));
+    const win = window.open(href, 'rdwin',
+      'popup=1,noopener=0,width=' + w + ',height=' + h + ',left=' + left + ',top=' + top);
+    if (win) { try { win.focus(); } catch (e) {} }
+    return win || null;
+  } catch (e) { return null; }
+}
+
 /** 붙여 넣을 자리를 편다 */
 function rdLinkPaste(box, href) {
   const lb = box.querySelector('.lb');
@@ -7115,11 +7146,9 @@ function rdBind() {
     if (Date.now() - hlAt < 600) return;
     hlAt = Date.now();
     const k = t.dataset.hl;
-    if (k !== 'x') {
-      RD.pen = k;                       // 그을 때 쓸 색으로 삼는다
-      RD.tb.querySelectorAll('[data-hl]').forEach(x => x.classList.remove('sel'));
-      t.classList.add('sel');
-    }
+    RD.pen = k;                         // 그을 때 쓸 붓 — 색이든 밑줄이든 지우개든
+    RD.tb.querySelectorAll('[data-hl]').forEach(x => x.classList.remove('sel'));
+    t.classList.add('sel');
     rdPaint(k);
   };
   RD.tb.addEventListener('pointerup', hlHit);
@@ -7153,41 +7182,82 @@ function rdBind() {
     }
     return (r && RD.doc.contains(r.startContainer)) ? r : null;
   }
+  // 미리보기는 글을 건드리지 않는다 — 브라우저의 「강조 겹」(CSS Highlight API)에
+  // 범위만 얹는다. 손이 떨어지면 그때 진짜로 감싼다. 강조 겹이 없는 옛
+  // 브라우저에서는 브라우저의 선택 표시로 대신 따라오게 한다.
+  const HLAPI = (typeof CSS !== 'undefined') && CSS.highlights && (typeof Highlight === 'function');
+  function rdStrokeRange(st, x, y) {
+    const r2 = rdCaretAt(x, y) || rdCaretAt(st.lx, st.ly);
+    if (!r2) return null;
+    let a = st.r, b = r2;
+    try { if (a.compareBoundaryPoints(Range.START_TO_START, b) > 0) { const t = a; a = b; b = t; } }
+    catch (err) { return null; }
+    const rng = document.createRange();
+    try { rng.setStart(a.startContainer, a.startOffset); rng.setEnd(b.startContainer, b.startOffset); }
+    catch (err) { return null; }
+    return rng.collapsed ? null : rng;
+  }
+  function rdPreview(rng) {
+    const k = RD.pen;
+    RD.doc.classList.toggle('penu', k === 'u');
+    RD.doc.classList.toggle('penx', k === 'x');
+    if (HLAPI) {
+      RD.doc.style.setProperty('--pen', RD_HL[+k] || RD_HL[0]);
+      try { CSS.highlights.set('rdpen', new Highlight(rng)); } catch (err) {}
+    } else {
+      try { const s = getSelection(); s.removeAllRanges(); s.addRange(rng); } catch (err) {}
+    }
+  }
+  function rdPreviewOff() {
+    RD.doc.classList.remove('penu', 'penx');
+    if (HLAPI) { try { CSS.highlights.delete('rdpen'); } catch (err) {} }
+  }
   RD.doc.addEventListener('pointerdown', e => {
     RD.stroke = null;
     if (!document.body.classList.contains('rdrpen')) return;
     if (e.target.closest('.rlink,.rverse,.rmemo,.rgo,a[href]')) return;
     const r = rdCaretAt(e.clientX, e.clientY);
     if (!r) return;
-    RD.stroke = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, r: r, on: false };
+    RD.stroke = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, r: r, on: false, id: e.pointerId };
   });
   RD.doc.addEventListener('pointermove', e => {
     const st = RD.stroke;
     if (!st) return;
     st.lx = e.clientX; st.ly = e.clientY;
-    if (!st.on && Math.abs(e.clientX - st.x) > 8) st.on = true;
+    if (!st.on && Math.abs(e.clientX - st.x) > 4) {
+      st.on = true;
+      // 붓질이 시작되면 손가락을 붙잡아 둔다 — 글 밖으로 나가도 놓치지 않는다
+      try { RD.doc.setPointerCapture(st.id); } catch (err) {}
+    }
+    if (!st.on) return;
+    const rng = rdStrokeRange(st, e.clientX, e.clientY);
+    if (rng) rdPreview(rng);
   });
-  RD.doc.addEventListener('pointercancel', () => { RD.stroke = null; });
+  RD.doc.addEventListener('pointercancel', () => { RD.stroke = null; rdPreviewOff(); });
   RD.doc.addEventListener('pointerup', e => {
     const st = RD.stroke;
     RD.stroke = null;
     if (!st || !st.on) return;
-    const r2 = rdCaretAt(e.clientX, e.clientY) || rdCaretAt(st.lx, st.ly);
-    if (!r2) return;
-    let a = st.r, b = r2;
-    try { if (a.compareBoundaryPoints(Range.START_TO_START, b) > 0) { const t = a; a = b; b = t; } }
-    catch (err) { return; }
-    const rng = document.createRange();
-    try { rng.setStart(a.startContainer, a.startOffset); rng.setEnd(b.startContainer, b.startOffset); }
-    catch (err) { return; }
-    if (rng.collapsed) return;
+    rdPreviewOff();
+    const rng = rdStrokeRange(st, e.clientX, e.clientY);
+    if (!rng) return;
+    const k = RD.pen;
     rdPush();
-    const made = rdWrapRange(rng, () => {
-      const w = document.createElement('mark');
-      w.setAttribute('data-rd', '1');
-      w.style.background = RD_HL[+RD.pen] || RD_HL[0];
-      return w;
-    });
+    let made = 0;
+    if (k === 'x') {
+      for (const el of [...RD.doc.querySelectorAll('mark,u[data-rd]')]) {
+        let hit = false;
+        try { hit = rng.intersectsNode(el); } catch (err) {}
+        if (hit) { rdUnwrap(el); made++; }
+      }
+    } else {
+      made = rdWrapRange(rng, () => {
+        const w = document.createElement(k === 'u' ? 'u' : 'mark');
+        w.setAttribute('data-rd', '1');
+        if (k !== 'u') w.style.background = RD_HL[+k] || RD_HL[0];
+        return w;
+      });
+    }
     if (!made) { RD.un.pop(); rdSyncUndo(); return; }
     try { getSelection().removeAllRanges(); } catch (err) {}
     RD.range = null;
@@ -7231,8 +7301,11 @@ function rdBind() {
     }
   }, 30));
   RD.doc.addEventListener('click', e => {
-    // 진짜 링크는 손대지 않는다 — 그대로 열리게 둔다
-    if (e.target.closest('a.lnew')) return;
+    // 진짜 링크는 막지 않는다. 다만 컴퓨터에서는 새 탭 대신 **판 자리에
+    // 창을 하나 띄워** 그 안에서 열리게 한다 — 첫째 집(top-level) 창이라
+    // 그 사이트의 쿠키가 다 살아 있어 온전히 그려진다. 안 되면 그대로 탭.
+    const ln = e.target.closest('a.lnew');
+    if (ln) { if (rdOpenWin(ln.href)) e.preventDefault(); return; }
     const lb = e.target.closest('.rlink [data-l]');
     if (lb) {
       const box = lb.closest('.rlink');
@@ -7272,6 +7345,7 @@ function rdBind() {
       // 상자는 그 밑에 그대로 남으니, 새 창에서 글을 복사해 돌아오면
       // 붙여 넣을 자리가 이미 기다리고 있다.
       if (!rdOpensAway(href, a)) e.preventDefault();
+      else if (rdOpenWin(a.href)) e.preventDefault();
       try { rdOpenLink(href, a); } catch (err) {}
       return;
     }
