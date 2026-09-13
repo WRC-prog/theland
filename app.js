@@ -6697,10 +6697,10 @@ function rdVerseHits(ref) {
  *  글만 받아 오는 것도(CORS 머리글이 없다) 그쪽이 거부한다. 그것을 뚫는
  *  일은 남이 세워 둔 문을 억지로 여는 일이고, 이 지도의 규칙(본문을 그대로
  *  옮기지 않는다)에도 어긋난다. 대신 **우리가 쓴 것**을 보여 준다. */
-function rdVerseBox(ref, a) {
+function rdVerseBox(ref, a, at) {
   const hits = rdVerseHits(ref);
   if (!hits.length) return false;
-  const blk = rdBlockOf(a) || RD.doc.lastElementChild;
+  const blk = at || rdBlockOf(a) || RD.doc.lastElementChild;
   const nx = blk && blk.nextElementSibling;
   if (nx && nx.classList && nx.classList.contains('rverse') && nx.getAttribute('data-q') === ref) {
     nx.remove(); return true;                    // 다시 누르면 접힌다
@@ -6753,11 +6753,15 @@ function rdLinkSaved(href) {
 
 /** 이 링크는 판 안에서 펼 길이 아주 없는가?
  *  담아 둔 것도 없고, 우리 자료로 펼 수도 없고, 틀에도 안 들어오는 곳. */
+/** 이 링크는 판 안에서 펼 길이 아주 없는가?
+ *
+ *  담아 둔 것이 있으면 그것을 편다. 그 밖에는, 안에서 열리지 않는 곳이면
+ *  **누른 대로 열어 준다.** 예전에는 우리 기록이 있으면 링크를 막고 카드를
+ *  대신 띄웠는데 — 링크를 눌렀으면 링크가 열려야 한다. 우리 기록은 상자
+ *  바닥에서 원할 때 편다. */
 function rdOpensAway(href, a) {
   try {
     if (rdLinkSaved(href)) return false;
-    const q = rdVerseOf(href, a);
-    if (q && rdVerseHits(q).length) return false;
     return rdWalled(new URL(href, location.href).host);
   } catch (e) { return false; }
 }
@@ -6932,8 +6936,6 @@ function rdLinkFill(box, href) {
 }
 
 function rdOpenLink(href, a) {
-  const q = rdVerseOf(href, a);
-  if (q && !rdLinkSaved(href) && rdVerseBox(q, a)) return;
   let host = href;
   try { host = new URL(href, location.href).host; } catch (e) {}
   // 링크가 든 덩이를 찾는다 — 상자는 늘 그 덩이 바로 다음 줄에 앉는다.
@@ -6961,7 +6963,8 @@ function rdOpenLink(href, a) {
     '<div class="lf" contenteditable="false"><u></u>' +
     '<a class="lnew" target="_blank" rel="noopener noreferrer"></a>' +
     '<button data-l="paste"></button>' +
-    '<button data-l="quote"></button></div>';
+    '<button data-l="quote"></button>' +
+    '<button data-l="verse"></button></div>';
   box.querySelector('.lh u').textContent = host;
   box.querySelector('.lf u').textContent = L.s('안 보이면', 'Blank?');
   box.querySelectorAll('a.lnew').forEach(x => { x.href = href; });
@@ -6970,6 +6973,12 @@ function rdOpenLink(href, a) {
   box.querySelector('.lf [data-l="paste"]').textContent =
     rdLinkSaved(href) ? L.s('다시 붙여 넣기', 'Replace') : L.s('내용 붙여 넣기', 'Paste it here');
   box.querySelector('.lf [data-l="quote"]').textContent = L.s('인용', 'Quote');
+  // 이 링크가 성구를 가리키면, 우리 자료에 걸린 사건 수를 바닥에 적어 둔다
+  const vq = rdVerseOf(href, a);
+  const vn = vq ? rdVerseHits(vq).length : 0;
+  const vb = box.querySelector('.lf [data-l="verse"]');
+  if (vn) { vb.textContent = L.s('우리 기록 ' + vn + '건', vn + ' of ours'); vb.setAttribute('data-q', vq); }
+  else vb.remove();
   rdFoldLabel(box);
   if (blk) blk.after(box); else RD.doc.appendChild(box);
   rdLinkFill(box, href);
@@ -7237,6 +7246,7 @@ function rdBind() {
         if (pb) pb.textContent = L.s('다시 붙여 넣기', 'Replace');
       }
       else if (x === 'quote') rdQuote(box, hf);
+      else if (x === 'verse') rdVerseBox(lb.getAttribute('data-q'), null, box);
       else { box.classList.toggle('fold'); rdFoldLabel(box); }
       return;
     }
