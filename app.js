@@ -5790,7 +5790,9 @@ const RD = {
   html: '', text: '', at: 0,      // 붙여 넣은 원본
   el: null, doc: null, bar: null, tb: null, link: null, grip: null, range: null, selT: 0,
   edit: false, zoom: 1, snap: 1,  // 시트 단계 (0 손잡이만 · 1 절반 · 2 전체)
-  key: '', saveT: 0, wide: 0.5
+  key: '', saveT: 0, wide: 0.5,
+  un: [], re: [], typeT: 0,       // 되돌리기 밑천
+  pen: '0', stroke: null          // 형광펜 — 지금 색, 긋고 있는 붓질
 };
 
 function rdPhone() { return innerWidth < 700; }
@@ -5856,7 +5858,11 @@ function rdClean(html) {
   let li = 0, ii = 0;
   root.querySelectorAll('a').forEach(a => {
     const h = links[li++] || '';
-    if (/^(https?:|mailto:)/i.test(h)) { a.setAttribute('href', h); a.setAttribute('target', '_blank'); }
+    if (/^(https?:|mailto:)/i.test(h)) {
+      a.setAttribute('href', h);
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener noreferrer');
+    }
   });
   root.querySelectorAll('img').forEach(im => {
     const s = imgs[ii++] || '';
@@ -5907,13 +5913,18 @@ function rdMake() {
   R.innerHTML =
     '<div id="rdrGrip"><i></i></div>' +
     '<div id="rdrBar">' +
-      '<button id="rdrMode" class="rw"></button>' +
-      '<button id="rdrMinus">−</button>' +
-      '<button id="rdrZoom" class="ro"></button>' +
-      '<button id="rdrPlus">+</button>' +
-      '<button id="rdrHl">\u270e\u0332</button>' +
-      '<button id="rdrMemo">✎</button>' +
-      '<span class="sp"></span>' +
+      // 단추가 늘었다. 좁은 화면에서 뭉개지지 않도록 왼쪽 무리만 옆으로
+      // 밀리게 하고, 닫기와 내보내기는 늘 제자리에 붙여 둔다.
+      '<div id="rdrGrp">' +
+        '<button id="rdrMode" class="rw"></button>' +
+        '<button id="rdrUndo" title="실행 취소">↶</button>' +
+        '<button id="rdrRedo" title="되돌리기">↷</button>' +
+        '<button id="rdrMinus">−</button>' +
+        '<button id="rdrZoom" class="ro"></button>' +
+        '<button id="rdrPlus">+</button>' +
+        '<button id="rdrHl">\u270e\u0332</button>' +
+        '<button id="rdrMemo">✎</button>' +
+      '</div>' +
       '<button id="rdrShare">↗</button>' +
       '<button id="rdrClose">✕</button>' +
     '</div>' +
@@ -5966,6 +5977,15 @@ function rdStyle() {
     '#rdrBar{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:7px 10px;' +
       'border-bottom:1px solid rgba(255,255,255,.12)}' +
     '#rdrBar .sp{flex:1}' +
+    '#rdrGrp{display:flex;align-items:center;gap:6px;flex:1;min-width:0;' +
+      'overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}' +
+    '#rdrGrp::-webkit-scrollbar{display:none}' +
+    '#rdrGrp>*{flex:0 0 auto}' +
+    '#rdrBar button:disabled{opacity:.32;cursor:default}' +
+    // 형광펜 모드 — 그으면 칠해진다. 위아래로 쓸면 여전히 글이 넘어간다.
+    'body.rdrpen #rdrDoc{touch-action:pan-y;cursor:crosshair}' +
+    'body.rdrpen #rdrHl{background:#f2b64c;border-color:transparent;color:#231702}' +
+    '#rdrTb b.sel{outline:2px solid #fff;outline-offset:2px}' +
     '#rdrBar button{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);' +
       'color:#e9e6e0;font:700 13px/1 inherit;height:34px;min-width:34px;padding:0 9px;' +
       'border-radius:17px;cursor:pointer}' +
@@ -5982,7 +6002,8 @@ function rdStyle() {
       'background:#e9e6df;font:600 11.5px/1.3 inherit;color:#4b525a}' +
     '#rdrDoc .rlink .lh u{flex:1;text-decoration:none;overflow:hidden;' +
       'text-overflow:ellipsis;white-space:nowrap}' +
-    '#rdrDoc .rlink .lh button{border:1px solid rgba(0,0,0,.24);background:none;' +
+    '#rdrDoc .rlink .lh button,#rdrDoc .rlink .lh a.lnew{border:1px solid rgba(0,0,0,.24);' +
+      'background:none;text-decoration:none;display:inline-block;' +
       'color:#1f5f88;font:700 11px/1 inherit;padding:4px 8px;border-radius:11px;cursor:pointer}' +
     '#rdrDoc .rlink .lb{height:330px;position:relative;background:#fff;overflow:hidden;' +
       'transition:height .18s ease}' +
@@ -5994,7 +6015,8 @@ function rdStyle() {
     '#rdrDoc .rverse .vh{display:flex;align-items:center;gap:7px;padding:6px 9px;' +
       'background:#f0ece1;font:700 11.5px/1.3 inherit;color:#6f5a24}' +
     '#rdrDoc .rverse .vh u{flex:1;text-decoration:none}' +
-    '#rdrDoc .rverse .vh button{border:1px solid rgba(0,0,0,.22);background:none;' +
+    '#rdrDoc .rverse .vh button,#rdrDoc .rverse .vh a.lnew{border:1px solid rgba(0,0,0,.22);' +
+      'background:none;text-decoration:none;display:inline-block;' +
       'color:#1f5f88;font:700 11px/1 inherit;padding:4px 8px;border-radius:11px;cursor:pointer}' +
     '#rdrDoc .rverse .vb{padding:2px 11px 9px}' +
     '#rdrDoc .rverse .ve{padding:9px 0;border-bottom:1px solid rgba(0,0,0,.09)}' +
@@ -6008,15 +6030,18 @@ function rdStyle() {
       'background:#e9e6df;border-top:1px solid rgba(0,0,0,.14);' +
       'font:500 11px/1.3 inherit;color:#6b7078}' +
     '#rdrDoc .rlink.fold .lf{display:none}' +
-    '#rdrDoc .rlink .lf button{border:1px solid rgba(0,0,0,.24);background:none;' +
+    '#rdrDoc .rlink .lf button,#rdrDoc .rlink .lf a.lnew{border:1px solid rgba(0,0,0,.24);' +
+      'background:none;text-decoration:none;display:inline-block;' +
       'color:#1f5f88;font:700 11px/1 inherit;padding:4px 9px;border-radius:11px;cursor:pointer}' +
     '#rdrDoc .rlink .no{position:absolute;inset:0;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;' +
       'align-items:center;justify-content:center;padding:16px;text-align:center;' +
       'font:500 12.5px/1.5 inherit;color:#6b7078;background:#f1efe9}' +
     '#rdrDoc .rlink .no .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}' +
-    '#rdrDoc .rlink .no button{border:1px solid rgba(0,0,0,.28);background:none;' +
+    '#rdrDoc .rlink .no button,#rdrDoc .rlink .no a.lnew{border:1px solid rgba(0,0,0,.28);' +
+      'background:none;text-decoration:none;display:inline-block;' +
       'color:#1f5f88;font:700 12px/1 inherit;padding:9px 14px;border-radius:15px;cursor:pointer}' +
-    '#rdrDoc .rlink .no button.go{background:#1f5f88;color:#fff;border-color:transparent}' +
+    '#rdrDoc .rlink .no a.lnew{background:#1f5f88;color:#fff;border-color:transparent}' +
+    '#rdrDoc .rlink .no button.go{background:#e8eef3;color:#1f5f88}' +
     // 링크 내용을 손수 담아 두는 자리. 한 번 담으면 그 링크는 늘 곧바로 펴진다.
     '#rdrDoc .rlink .lp{position:absolute;inset:0;box-sizing:border-box;overflow-y:auto;' +
       'padding:14px 16px;background:#fff;font:400 14px/1.7 inherit;color:#20242a;outline:none}' +
@@ -6118,7 +6143,12 @@ function rdStyle() {
     '@media (max-width:699px){' +
       'body.rdr #dock{right:0;left:0;bottom:calc(var(--rdrh,0px) + 12px)}' +
       'body.rdr #panel{bottom:var(--rdrh,0px);' +
-        'border-bottom:1px solid rgba(255,255,255,.14)}}';
+        'border-bottom:1px solid rgba(255,255,255,.14)}}' +
+    // 좁은 화면 — 눈금(100%)을 접고 사이를 좁혀 단추가 다 들어오게 한다.
+    // 앞서 나온 규칙들을 눌러야 하므로 **맨 끝**에 둔다.
+    '@media (max-width:699px){#rdrZoom{display:none}#rdrGrp{gap:4px}' +
+      '#rdrBar button{min-width:31px;padding:0 6px}' +
+      '#rdrBar button.rw{padding:0 9px}}';
   document.head.appendChild(st);
 }
 
@@ -6136,17 +6166,19 @@ function rdOpen() {
   try { const z = parseFloat(localStorage.getItem('theland.read.zoom')); if (z >= .8 && z <= 2) RD.zoom = z; } catch (e) {}
   rdApplyZoom();
   rdMode(false);
+  RD.un = []; RD.re = [];
   document.body.classList.add('rdr');
   rdSnap(rdPhone() ? 1 : 2);
   rdVars();
   rdSyncBar();
+  rdSyncUndo();
 }
 
 function rdClose() {
   rdSaveNow();
   document.body.classList.remove('rdr', 'rdr0', 'rdr2', 'rdredit');
   rdVars();
-  document.body.classList.remove('rdrhl');
+  document.body.classList.remove('rdrhl', 'rdrpen');
   if (RD.doc) RD.doc.querySelectorAll('.rlink').forEach(x => x.remove());
 }
 
@@ -6173,6 +6205,53 @@ function rdApplyZoom() {
   RD.doc.style.fontSize = (15 * (RD.doc.style.zoom ? 1 : RD.zoom)).toFixed(1) + 'px';
   try { localStorage.setItem('theland.read.zoom', String(RD.zoom)); } catch (e) {}
   rdSyncBar();
+}
+
+// ── 되돌리기 ────────────────────────────────────────────────
+//
+// 붙여 넣은 글을 칠하고 · 고치고 · 메모를 끼우다 보면 되돌리고 싶은 순간이
+// 온다. 낱낱의 손짓을 되짚는 대신 **바뀌기 직전의 모습을 통째로** 챙겨
+// 둔다. 판이 통째로 하나이니 이 쪽이 확실하고, 어긋날 구석이 없다.
+function rdShot() {
+  const c = RD.doc.cloneNode(true);
+  c.querySelectorAll('.rlink').forEach(x => x.remove());   // 펴 둔 링크 상자는 뺀다
+  return c.innerHTML;
+}
+
+/** 바꾸기 **직전에** 부른다 */
+function rdPush() {
+  if (!RD.doc) return;
+  const h = rdShot();
+  if (RD.un.length && RD.un[RD.un.length - 1] === h) return;
+  RD.un.push(h);
+  if (RD.un.length > 40) RD.un.shift();
+  RD.re.length = 0;
+  rdSyncUndo();
+}
+
+function rdUndo() {
+  if (!RD.un.length) return;
+  RD.re.push(rdShot());
+  RD.doc.innerHTML = RD.un.pop();
+  RD.range = null;
+  rdSaveNow();
+  rdSyncUndo();
+}
+
+function rdRedo() {
+  if (!RD.re.length) return;
+  RD.un.push(rdShot());
+  RD.doc.innerHTML = RD.re.pop();
+  RD.range = null;
+  rdSaveNow();
+  rdSyncUndo();
+}
+
+function rdSyncUndo() {
+  const u = document.getElementById('rdrUndo');
+  const r = document.getElementById('rdrRedo');
+  if (u) u.disabled = !RD.un.length;
+  if (r) r.disabled = !RD.re.length;
 }
 
 // ── 저장 ────────────────────────────────────────────────────
@@ -6336,6 +6415,7 @@ function rdPaint(kind) {
     r = RD.range;                       // 손이 닿는 순간 풀려 버린 자리를 되살린다
   }
   if (!r) return;
+  rdPush();
   if (kind === 'x') {
     // **내가 친 것만** 벗긴다. 붙여 넣은 글이 본래 갖고 있던 밑줄까지
     // 지워 버리면 원문이 상한다.
@@ -6362,6 +6442,7 @@ function rdPaint(kind) {
 // ── 메모 상자 ───────────────────────────────────────────────
 /** 메모 상자 하나 — 커서가 놓인 덩이 **바로 다음 줄**에 앉는다 */
 function rdAddMemo() {
+  rdPush();
   const box = document.createElement('div');
   box.className = 'rmemo';
   box.innerHTML =
@@ -6495,36 +6576,104 @@ function rdFoldLabel(box) {
 }
 
 /** 성구 링크인가 — 그렇다면 어떤 성구인가 */
-function rdVerseOf(href) {
-  if (!/wol\.jw\.org/.test(href)) return null;
-  const m = /[?&]q=([^&]+)/.exec(href);
-  if (!m) return null;
-  try { return decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch (e) { return null; }
+/** 우리 자료가 쓰는 책 이름들 */
+let RD_BOOKS = null;
+function rdBooks() {
+  if (RD_BOOKS) return RD_BOOKS;
+  const set = new Set();
+  for (const e of EVENTS) {
+    const m = /^\s*([^0-9]+?)\s*\d/.exec(String(e.ref || ''));
+    if (m) set.add(m[1].trim());
+  }
+  RD_BOOKS = [...set];
+  return RD_BOOKS;
 }
 
-/** 그 성구가 걸린 우리 사건들을 찾는다 (책 이름 + 장까지만 맞춘다) */
+/** 줄여 쓴 책 이름을 우리 자료의 이름으로 맞춘다.
+ *  바깥 글은 「신명 7:1」·「출애굽 34:11」처럼 줄여 쓰는데, 우리 자료는
+ *  「신명기」·「출애굽기」다. 이것을 맞춰 주지 않으면 한 건도 걸리지 않는다. */
+function rdBookName(name) {
+  const n = String(name || '').trim();
+  if (!n) return '';
+  const all = rdBooks();
+  if (all.indexOf(n) >= 0) return n;
+  const hit = all.filter(b => b.indexOf(n) === 0);
+  if (hit.length === 1) return hit[0];
+  if (hit.length > 1) {
+    for (const suf of ['기', '서', '복음']) {
+      if (hit.indexOf(n + suf) >= 0) return n + suf;
+    }
+    return hit.slice().sort((a, b) => a.length - b.length)[0];
+  }
+  return n;
+}
+
+/** 이 링크가 가리키는 성구.
+ *
+ *  두 꼴이 있다. 찾아보기 주소(?q=이사야 10:9)에는 성구가 적혀 있지만,
+ *  기사 안의 성구 링크(/wol/bc/...)에는 글 번호만 있고 성구가 없다.
+ *  뒤엣것은 **링크에 적힌 글자**가 곧 성구다 — 「여호수아 10:1」. */
+function rdVerseOf(href, a) {
+  if (!/wol\.jw\.org/.test(href)) return null;
+  const m = /[?&]q=([^&]+)/.exec(href);
+  if (m) {
+    try { return decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch (e) {}
+  }
+  if (/\/wol\/bc\//i.test(href) && a) {
+    const t = (a.textContent || '').replace(/\s+/g, ' ').trim().replace(/[;,.\s]+$/, '');
+    if (/\d\s*:\s*\d/.test(t) && t.length <= 40) return t;
+  }
+  return null;
+}
+
+/** 찾는 절이 이 기록이 다루는 범위 안에 드는가.
+ *  2 = 그 절을 바로 다룬다 · 1 = 같은 장이다.
+ *  「여호수아 10:1」을 눌렀는데 같은 장 마흔한째 절 이야기가 맨 위에 오면
+ *  헛짚은 것처럼 보인다. 가까운 것부터 앞세운다. */
+function rdVerseNear(refText, book, chap, verse) {
+  if (!verse) return 1;
+  const esc = String(book).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(esc + '\\s*' + chap + '\\s*:\\s*([0-9,\\-–\\s]+)');
+  const m = re.exec(refText);
+  if (!m) return 1;
+  for (const seg of m[1].split(',')) {
+    const p = /(\d+)\s*[-–]\s*(\d+)/.exec(seg);
+    if (p) { if (verse >= +p[1] && verse <= +p[2]) return 2; continue; }
+    const s = /(\d+)/.exec(seg);
+    if (s && +s[1] === verse) return 2;
+  }
+  return 1;
+}
+
+/** 그 성구가 걸린 우리 사건들 — 장으로 거르고, 절이 가까운 것부터 */
 function rdVerseHits(ref) {
   const keys = [];
   for (const one of String(ref).split(/[;,]/)) {
     const t = one.trim();
-    const m = /^(.+?)\s*(\d+)\s*:/.exec(t);
-    if (m) keys.push(m[1].trim() + ' ' + m[2] + ':');
+    const m = /^(.+?)\s*(\d+)\s*:\s*(\d+)?/.exec(t);
+    if (!m) continue;
+    const book = rdBookName(m[1].trim());
+    keys.push({ book: book, chap: m[2], verse: m[3] ? +m[3] : 0, key: book + ' ' + m[2] + ':' });
   }
   if (!keys.length) return [];
   const out = [], seen = new Set();
   for (const e of EVENTS) {
     if (!e.ref) continue;
     const r = String(e.ref).replace(/\s+/g, ' ');
+    let best = 0;
     for (const k of keys) {
-      if (r.indexOf(k) < 0) continue;
-      const id = e.place + '\u0000' + e.title;
-      if (seen.has(id)) break;
-      seen.add(id); out.push(e);
-      break;
+      if (r.indexOf(k.key) < 0) continue;
+      const sc = rdVerseNear(r, k.book, k.chap, k.verse);
+      if (sc > best) best = sc;
     }
-    if (out.length >= 8) break;
+    if (!best) continue;
+    const id = e.place + '\u0000' + e.title;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ e: e, sc: best });
   }
-  return out;
+  out.sort((a, b) => b.sc - a.sc);
+  return out.slice(0, 8).map(x => x.e);
 }
 
 /** 성구 상자 — 바깥을 열지 않고 우리 자료를 그 자리에 편다.
@@ -6546,10 +6695,14 @@ function rdVerseBox(ref, a) {
   box.contentEditable = 'false';
   box.setAttribute('data-q', ref);
   box.innerHTML = '<div class="vh"><u></u>' +
-    '<button data-v="out"></button><button data-v="x">\u2715</button></div>' +
+    '<a class="lnew" target="_blank" rel="noopener noreferrer"></a>' +
+    '<button data-v="x">\u2715</button></div>' +
     '<div class="vb"></div>';
   box.querySelector('.vh u').textContent = ref + ' \u00b7 ' + L.s(hits.length + '건', hits.length);
-  box.querySelector('[data-v="out"]').textContent = L.s('본문 열기', 'Open text');
+  const vout = box.querySelector('.vh a.lnew');
+  vout.textContent = L.s('본문 열기', 'Open text');
+  vout.href = (a && a.getAttribute('href')) ||
+              ('https://wol.jw.org/ko/wol/l/r8/lp-ko?q=' + encodeURIComponent(ref));
   const vb = box.querySelector('.vb');
   for (const e of hits) {
     const d = document.createElement('div');
@@ -6583,6 +6736,17 @@ function rdLinkSaved(href) {
   try { return localStorage.getItem(rdLinkKey(href)) || ''; } catch (e) { return ''; }
 }
 
+/** 이 링크는 판 안에서 펼 길이 아주 없는가?
+ *  담아 둔 것도 없고, 우리 자료로 펼 수도 없고, 틀에도 안 들어오는 곳. */
+function rdOpensAway(href, a) {
+  try {
+    if (rdLinkSaved(href)) return false;
+    const q = rdVerseOf(href, a);
+    if (q && rdVerseHits(q).length) return false;
+    return rdWalled(new URL(href, location.href).host);
+  } catch (e) { return false; }
+}
+
 /** 스스로 문을 세워 두어 다른 화면 **안에서는** 결코 열리지 않는 곳.
  *
  *  재어 보고 알았다. 맨 위 창에서 열면 먼저 쿠키를 묻는 문이 서고, 틀
@@ -6602,8 +6766,13 @@ function rdLinkAsk(href, walled) {
     : L.s('내용이 뜨지 않으면', 'Nothing showing?');
   const row = document.createElement('div');
   row.className = 'row';
-  const b1 = document.createElement('button');
-  b1.setAttribute('data-l', 'new');
+  // 스크립트로 창을 여는 길(window.open)은 막히는 곳이 많다 — 실제로 막혔다.
+  // **진짜 링크**는 막히지 않는다. 여는 자리는 모두 진짜 링크로 둔다.
+  const b1 = document.createElement('a');
+  b1.className = 'lnew';
+  b1.href = href;
+  b1.target = '_blank';
+  b1.rel = 'noopener noreferrer';
   b1.textContent = L.s('새 창에서 열기', 'Open in a new tab');
   const b2 = document.createElement('button');
   b2.setAttribute('data-l', 'paste');
@@ -6680,7 +6849,7 @@ function rdLinkFill(box, href) {
 }
 
 function rdOpenLink(href, a) {
-  const q = rdVerseOf(href);
+  const q = rdVerseOf(href, a);
   if (q && !rdLinkSaved(href) && rdVerseBox(q, a)) return;
   let host = href;
   try { host = new URL(href, location.href).host; } catch (e) {}
@@ -6702,17 +6871,18 @@ function rdOpenLink(href, a) {
   box.innerHTML =
     '<div class="lh"><u></u>' +
     '<button data-l="fold"></button>' +
-    '<button data-l="new"></button>' +
+    '<a class="lnew" target="_blank" rel="noopener noreferrer"></a>' +
     '<button data-l="x">\u2715</button></div>' +
     '<div class="lb"></div>' +
     // 빠져나갈 문과 손수 담는 문은 늘 열어 둔다
     '<div class="lf" contenteditable="false"><u></u>' +
-    '<button data-l="new"></button>' +
+    '<a class="lnew" target="_blank" rel="noopener noreferrer"></a>' +
     '<button data-l="paste"></button></div>';
   box.querySelector('.lh u').textContent = host;
   box.querySelector('.lf u').textContent = L.s('안 보이면', 'Blank?');
-  box.querySelector('.lh [data-l="new"]').textContent = L.s('새 창', 'Open');
-  box.querySelector('.lf [data-l="new"]').textContent = L.s('새 창에서 열기', 'Open in a new tab');
+  box.querySelectorAll('a.lnew').forEach(x => { x.href = href; });
+  box.querySelector('.lh a.lnew').textContent = L.s('새 창', 'Open');
+  box.querySelector('.lf a.lnew').textContent = L.s('새 창에서 열기', 'Open in a new tab');
   box.querySelector('.lf [data-l="paste"]').textContent =
     rdLinkSaved(href) ? L.s('다시 붙여 넣기', 'Replace') : L.s('내용 붙여 넣기', 'Paste it here');
   rdFoldLabel(box);
@@ -6745,7 +6915,7 @@ function rdNeed(src) {
 function rdCleanClone() {
   const c = RD.doc.cloneNode(true);
   c.querySelectorAll('.rlink,.rgo,.rmemo .mh,#rdrTb,#rdrPop').forEach(x => x.remove());
-  c.querySelectorAll('.rverse .vh button').forEach(x => x.remove());
+  c.querySelectorAll('.rverse .vh button,.rverse .vh a.lnew').forEach(x => x.remove());
   c.querySelectorAll('.rmemo').forEach(x => x.classList.remove('fold'));
   c.querySelectorAll('[contenteditable]').forEach(x => x.removeAttribute('contenteditable'));
   return c;
@@ -6760,8 +6930,27 @@ async function rdExport(kind) {
   }
   if (kind === 'pdf') {
     const w = window.open('', '_blank');
-    if (!w) { toast(L.s('창을 열지 못했습니다', 'Could not open a window')); return; }
-    w.document.write('<!doctype html><meta charset="utf-8"><title>' + rdStamp() + '</title>' +
+    // 스크립트로 여는 창은 막히는 곳이 많다. 막혔다고 빈손으로 돌려보내지
+    // 않는다 — 같은 것을 파일로 내려 준다. 열어서 인쇄하면 그대로 PDF 다.
+    if (!w) {
+      const doc = rdPrintHTML();
+      rdDrop(new Blob([doc], { type: 'text/html;charset=utf-8' }),
+             '내용-' + rdStamp() + '.html');
+      toast(L.s('새 창이 막혀 파일로 내려받았습니다 — 열어서 인쇄하면 PDF 가 됩니다',
+                'Popup blocked — saved as a file; open it and print to PDF'));
+      return;
+    }
+    w.document.write(rdPrintHTML());
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
+    return;
+  }
+  // 사진 — 스크롤해서 안 보이는 데까지 통째로 한 장
+  return rdShoot();
+}
+
+function rdPrintHTML() {
+  return '<!doctype html><meta charset="utf-8"><title>' + rdStamp() + '</title>' +
       '<style>body{margin:26px;font:15px/1.7 -apple-system,"Apple SD Gothic Neo",sans-serif;color:#111}' +
       'mark{padding:0 1px;border-radius:3px}img{max-width:100%}' +
       '.rmemo{border:1px dashed #c9a24a;background:#fdf6e6;border-radius:8px;padding:8px 11px;margin:12px 0}' +
@@ -6772,12 +6961,10 @@ async function rdExport(kind) {
       '.rverse p{margin:0;font-size:13px}.rverse i{font-style:normal;font-size:11.5px;color:#8a6a1e}' +
       '.rverse b{background:rgba(242,182,76,.3);border-radius:4px;padding:1px 5px;margin-right:5px}' +
       '</style>' +
-      '<body>' + rdCleanClone().innerHTML + '</body>');
-    w.document.close();
-    setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
-    return;
-  }
-  // 사진 — 스크롤해서 안 보이는 데까지 통째로 한 장
+      '<body>' + rdCleanClone().innerHTML + '</body>';
+}
+
+async function rdShoot() {
   toast(L.s('사진으로 담는 중…', 'Rendering…'));
   try {
     if (!window.html2canvas) {
@@ -6787,7 +6974,8 @@ async function rdExport(kind) {
       onclone: d => {
         const n = d.getElementById('rdrDoc');
         if (!n) return;
-        n.querySelectorAll('.rlink,.rgo,.rmemo .mh,.rverse .vh button').forEach(x => x.remove());
+        n.querySelectorAll('.rlink,.rgo,.rmemo .mh,.rverse .vh button,.rverse .vh a.lnew')
+         .forEach(x => x.remove());
         n.querySelectorAll('.rmemo').forEach(x => x.classList.remove('fold'));
       },
       backgroundColor: '#15181c', scale: Math.min(2, devicePixelRatio || 1),
@@ -6831,13 +7019,92 @@ function rdBind() {
     if (!t) return;
     if (Date.now() - hlAt < 600) return;
     hlAt = Date.now();
-    rdPaint(t.dataset.hl);
+    const k = t.dataset.hl;
+    if (k !== 'x') {
+      RD.pen = k;                       // 그을 때 쓸 색으로 삼는다
+      RD.tb.querySelectorAll('[data-hl]').forEach(x => x.classList.remove('sel'));
+      t.classList.add('sel');
+    }
+    rdPaint(k);
   };
   RD.tb.addEventListener('pointerup', hlHit);
   RD.tb.addEventListener('click', hlHit);
   onTap(document.getElementById('rdrHl'), () => {
-    document.body.classList.toggle('rdrhl');
-    if (document.body.classList.contains('rdrhl')) rdKeepSel();
+    const on = !document.body.classList.contains('rdrpen');
+    document.body.classList.toggle('rdrpen', on);
+    document.body.classList.toggle('rdrhl', on);
+    if (on) {
+      rdKeepSel();
+      const cur = RD.tb.querySelector('[data-hl="' + RD.pen + '"]');
+      if (cur) { RD.tb.querySelectorAll('[data-hl]').forEach(x => x.classList.remove('sel'));
+                 cur.classList.add('sel'); }
+      toast(L.s('형광펜 — 글 위를 그으면 칠해집니다', 'Marker on — swipe across the text'));
+    }
+  });
+  onTap(document.getElementById('rdrUndo'), rdUndo);
+  onTap(document.getElementById('rdrRedo'), rdRedo);
+
+  // ── 그어서 칠하기 ──────────────────────────────────────────
+  //
+  // 긁어서(선택해서) 색을 누르는 길은 그대로 둔다. 그 위에, 형광펜을 켜 두면
+  // **글 위를 그으면 그대로 칠해지는** 길을 하나 더 낸다. 위아래로 쓸면
+  // 글이 넘어가야 하니(touch-action:pan-y), 가로로 그은 것만 붓질로 센다.
+  function rdCaretAt(x, y) {
+    let r = null;
+    if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y);
+    else if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); }
+    }
+    return (r && RD.doc.contains(r.startContainer)) ? r : null;
+  }
+  RD.doc.addEventListener('pointerdown', e => {
+    RD.stroke = null;
+    if (!document.body.classList.contains('rdrpen')) return;
+    if (e.target.closest('.rlink,.rverse,.rmemo,.rgo,a[href]')) return;
+    const r = rdCaretAt(e.clientX, e.clientY);
+    if (!r) return;
+    RD.stroke = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, r: r, on: false };
+  });
+  RD.doc.addEventListener('pointermove', e => {
+    const st = RD.stroke;
+    if (!st) return;
+    st.lx = e.clientX; st.ly = e.clientY;
+    if (!st.on && Math.abs(e.clientX - st.x) > 8) st.on = true;
+  });
+  RD.doc.addEventListener('pointercancel', () => { RD.stroke = null; });
+  RD.doc.addEventListener('pointerup', e => {
+    const st = RD.stroke;
+    RD.stroke = null;
+    if (!st || !st.on) return;
+    const r2 = rdCaretAt(e.clientX, e.clientY) || rdCaretAt(st.lx, st.ly);
+    if (!r2) return;
+    let a = st.r, b = r2;
+    try { if (a.compareBoundaryPoints(Range.START_TO_START, b) > 0) { const t = a; a = b; b = t; } }
+    catch (err) { return; }
+    const rng = document.createRange();
+    try { rng.setStart(a.startContainer, a.startOffset); rng.setEnd(b.startContainer, b.startOffset); }
+    catch (err) { return; }
+    if (rng.collapsed) return;
+    rdPush();
+    const made = rdWrapRange(rng, () => {
+      const w = document.createElement('mark');
+      w.setAttribute('data-rd', '1');
+      w.style.background = RD_HL[+RD.pen] || RD_HL[0];
+      return w;
+    });
+    if (!made) { RD.un.pop(); rdSyncUndo(); return; }
+    try { getSelection().removeAllRanges(); } catch (err) {}
+    RD.range = null;
+    try { RD.doc.normalize(); } catch (err) {}
+    rdSaveNow();
+  });
+
+  // 글자를 치는 것도 되돌릴 수 있게 — 한 묶음마다 한 장
+  RD.doc.addEventListener('beforeinput', () => {
+    const now = Date.now();
+    if (now - RD.typeT > 900) rdPush();
+    RD.typeT = now;
   });
   RD.doc.addEventListener('pointerup', () => setTimeout(rdShowTb, 30));
   RD.doc.addEventListener('keyup', () => setTimeout(rdShowTb, 30));
@@ -6858,13 +7125,14 @@ function rdBind() {
     if (g) { rdDragMemo(g.closest('.rmemo'), e); return; }
   });
   RD.doc.addEventListener('click', e => {
+    // 진짜 링크는 손대지 않는다 — 그대로 열리게 둔다
+    if (e.target.closest('a.lnew')) return;
     const lb = e.target.closest('.rlink [data-l]');
     if (lb) {
       const box = lb.closest('.rlink');
       const x = lb.dataset.l;
       const hf = box.getAttribute('data-href');
       if (x === 'x') box.remove();
-      else if (x === 'new') window.open(hf, '_blank', 'noopener');
       else if (x === 'paste') {
         box.classList.remove('fold'); rdFoldLabel(box);
         rdLinkPaste(box, hf);
@@ -6876,17 +7144,22 @@ function rdBind() {
     }
     const vb2 = e.target.closest('.rverse [data-v]');
     if (vb2) {
-      const box = vb2.closest('.rverse');
-      if (vb2.dataset.v === 'x') box.remove();
-      else window.open('https://wol.jw.org/ko/wol/l/r8/lp-ko?q=' +
-                       encodeURIComponent(box.getAttribute('data-q')), '_blank', 'noopener');
+      if (vb2.dataset.v === 'x') vb2.closest('.rverse').remove();
       return;
     }
     const vg = e.target.closest('.rverse [data-go]');
     if (vg) { const s = siteByName.get(vg.getAttribute('data-go'));
               if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); } return; }
     const a = e.target.closest('a[href]');
-    if (a) { e.preventDefault(); rdOpenLink(a.getAttribute('href'), a); return; }
+    if (a) {
+      const href = a.getAttribute('href');
+      // 안에서 펼 길이 없는 링크라면 막지 않는다 — 눌렀으니 열려야 한다.
+      // 상자는 그 밑에 그대로 남으니, 새 창에서 글을 복사해 돌아오면
+      // 붙여 넣을 자리가 이미 기다리고 있다.
+      if (!rdOpensAway(href, a)) e.preventDefault();
+      try { rdOpenLink(href, a); } catch (err) {}
+      return;
+    }
     const mb = e.target.closest('.rmemo [data-m]');
     if (mb) {
       const box = mb.closest('.rmemo');
