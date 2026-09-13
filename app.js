@@ -2270,9 +2270,29 @@ function panBy(dx, dy, dist) {
  *  (dist 를 딱 집어 준 때만 따른다) */
 let flyAnim = null, flyT = 0;
 
+/** 옆 판이 덮은 만큼 목표를 비켜 놓는다 (세계 눈금) */
+function viewShift(d) {
+  const out = { dx: 0, dz: 0 };
+  if (fpv || !document.body.classList.contains('rdr')) return out;
+  const el = document.getElementById('rdr');
+  if (!el) return out;
+  const r = el.getBoundingClientRect();
+  let px = 0, py = 0;
+  if (innerWidth >= 700) px = -r.width / 2;      // 오른쪽 반을 덮었다 → 왼쪽으로
+  else py = -r.height / 2;                       // 아래를 덮었다 → 위로
+  const k = 2 * d * Math.tan(camera.fov * Math.PI / 360) / Math.max(innerHeight, 1);
+  const kz = k / Math.max(Math.sin(cam.el), 0.22);
+  const sa = Math.sin(cam.az), ca = Math.cos(cam.az);
+  out.dx = -(px * k * ca + py * kz * sa);
+  out.dz = (px * k * sa - py * kz * ca);
+  return out;
+}
+
 function flyTo(s, dist, now) {
   highlight = s.ko;
   const d1 = dist || cam.dist;
+  const vs = viewShift(d1);
+  if (vs.dx || vs.dz) s = { ko: s.ko, x: s.x + vs.dx, z: s.z + vs.dz };
   const km = Math.hypot(s.x - cam.tx, s.z - cam.tz);
   // 그냥 옮기는 자리 셋.
   //   · 지도 위의 이름을 **손으로 곧장 찍은** 때 — 이미 눈에 보이는 곳이라
@@ -5747,7 +5767,7 @@ addEventListener('pointerup', ev => {
 // 사건에는 글자판 말고 서식판(text/html)이 같이 실려 온다.
 const RD = {
   html: '', text: '', at: 0,      // 붙여 넣은 원본
-  el: null, doc: null, bar: null, tb: null, link: null, grip: null,
+  el: null, doc: null, bar: null, tb: null, link: null, grip: null, range: null, selT: 0,
   edit: false, zoom: 1, snap: 1,  // 시트 단계 (0 손잡이만 · 1 절반 · 2 전체)
   key: '', saveT: 0, wide: 0.5
 };
@@ -5822,7 +5842,28 @@ function rdClean(html) {
     if (/^(https?:|data:image\/)/i.test(s)) im.setAttribute('src', s);
     else im.remove();
   });
+  // 겉껍데기 한 겹만 남은 것은 벗긴다. 문단 사이에 무엇을 끼워 넣으려면
+  // 문단이 판의 바로 아래 자식이어야 한다 — 통째로 싸여 있으면 끼울 자리가
+  // 「맨 끝」 하나뿐이 된다.
+  for (let i = 0; i < 8; i++) {
+    const c = root.firstElementChild;
+    if (root.children.length !== 1 || !c) break;
+    if (!/^(DIV|SECTION|ARTICLE|MAIN)$/.test(c.tagName) || c.childElementCount < 2) break;
+    while (c.firstChild) root.insertBefore(c.firstChild, c);
+    c.remove();
+  }
   return root.innerHTML;
+}
+
+/** 이 마디가 든 **덩이** — 상자는 늘 덩이와 덩이 사이에 앉는다 */
+function rdBlockOf(node) {
+  let el = node && node.nodeType === 3 ? node.parentElement : node;
+  if (!el || !RD.doc.contains(el)) return null;
+  const blk = el.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,tr,figure,.rmemo,.rlink');
+  if (blk && RD.doc.contains(blk) && blk !== RD.doc) return blk;
+  // 문단 표가 아예 없는 글이면 판의 바로 아래 자식까지 올라간다
+  while (el && el.parentElement && el.parentElement !== RD.doc) el = el.parentElement;
+  return (el && el.parentElement === RD.doc) ? el : null;
 }
 
 function rdEscape(t) {
@@ -5857,6 +5898,7 @@ function rdMake() {
     '<div id="rdrDoc"></div>' +
     '<div id="rdrTb"></div>' +
     '<div id="rdrMenu"></div>' +
+    '<div id="rdrPop"></div>' +
     '<div id="rdrEdge"></div>';
   document.body.appendChild(R);
   RD.el = R;
@@ -5924,6 +5966,12 @@ function rdStyle() {
       'transition:height .18s ease}' +
     '#rdrDoc .rlink.fold .lb{height:0}' +
     '#rdrDoc .rlink iframe{width:100%;height:100%;border:0;display:block}' +
+    '#rdrDoc .rlink .lf{display:flex;align-items:center;gap:8px;padding:5px 9px;' +
+      'background:#e9e6df;border-top:1px solid rgba(0,0,0,.14);' +
+      'font:500 11px/1.3 inherit;color:#6b7078}' +
+    '#rdrDoc .rlink.fold .lf{display:none}' +
+    '#rdrDoc .rlink .lf button{border:1px solid rgba(0,0,0,.24);background:none;' +
+      'color:#1f5f88;font:700 11px/1 inherit;padding:4px 9px;border-radius:11px;cursor:pointer}' +
     '#rdrDoc .rlink .no{position:absolute;inset:0;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;' +
       'align-items:center;justify-content:center;padding:16px;text-align:center;' +
       'font:500 12.5px/1.5 inherit;color:#6b7078;background:#f1efe9}' +
@@ -5951,22 +5999,40 @@ function rdStyle() {
     '#rdrDoc .rgo:hover{background:#ffd68f}' +
     '#rdrDoc mark{border-radius:3px;padding:0 1px;color:#1a1a1a}' +
     // 메모 상자
-    '#rdrDoc .rmemo{display:block;margin:13px 0;padding:9px 11px 9px 30px;position:relative;' +
-      'border-radius:10px;border:1px dashed #c79a3c;box-sizing:border-box;' +
-      'background:#fdf5e3;color:#4a3a17;min-height:54px;' +
-      'font:400 14px/1.6 inherit;outline:none}' +
-    '#rdrDoc .rmemo::before{content:"\\2059";position:absolute;left:9px;top:8px;' +
-      'color:#c79a3c;font-size:13px;cursor:grab;line-height:1.4}' +
+    '#rdrDoc .rmemo{display:block;margin:13px 0;border-radius:10px;overflow:hidden;' +
+      'border:1px dashed #c79a3c;box-sizing:border-box;background:#fdf5e3;color:#4a3a17}' +
+    '#rdrDoc .rmemo .mh{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 8px;' +
+      'background:rgba(199,154,60,.16);font:600 11px/1.3 inherit;color:#8a6a1e}' +
+    '#rdrDoc .rmemo .mh .mg{cursor:grab;font-size:13px;line-height:1}' +
+    '#rdrDoc .rmemo .mh .sp{flex:1}' +
+    '#rdrDoc .rmemo .mh button{border:1px solid rgba(138,106,30,.4);background:none;' +
+      'color:#8a6a1e;font:700 11px/1 inherit;padding:3px 7px;border-radius:10px;cursor:pointer}' +
+    '#rdrDoc .rmemo .mb{padding:9px 11px;min-height:44px;font:400 14px/1.6 inherit;outline:none}' +
+    '#rdrDoc .rmemo.fold .mb{display:none}' +
     '#rdrDoc .rmemo.drag{opacity:.45}' +
     '#rdrDoc .rdrop{display:block;height:2px;margin:6px 0;background:#c98a1e;border-radius:1px}' +
     // 긁으면 뜨는 팝업
-    '#rdrTb{position:absolute;display:none;align-items:center;gap:7px;z-index:6;' +
-      'padding:7px 11px;border-radius:20px;background:rgba(14,16,20,.97);' +
-      'border:1px solid rgba(255,255,255,.18);box-shadow:0 6px 22px rgba(0,0,0,.55)}' +
+    // 긁은 자리 바로 위에 띄웠더니 기기가 띄우는 「복사 · 붙여넣기」 띠와
+    // 겹쳐 서로를 가렸다. 판 **아래쪽에 붙박이**로 둔다 — 겹칠 일이 없고,
+    // 손이 닿는 자리이기도 하다.
+    '#rdrTb{position:absolute;display:none;align-items:center;gap:9px;z-index:9;' +
+      'left:50%;transform:translateX(-50%);bottom:16px;' +
+      'padding:9px 13px;border-radius:23px;background:rgba(14,16,20,.98);' +
+      'border:1px solid rgba(255,255,255,.22);box-shadow:0 8px 26px rgba(0,0,0,.6)}' +
     '#rdrTb.on{display:flex}' +
-    '#rdrTb b{width:19px;height:19px;border-radius:10px;cursor:pointer;display:block}' +
+    '#rdrTb b{width:24px;height:24px;border-radius:13px;cursor:pointer;display:block;' +
+      'box-shadow:0 0 0 1px rgba(0,0,0,.35)}' +
     '#rdrTb s{text-decoration:none;color:#e6e9ec;font:700 12px/1 inherit;cursor:pointer;' +
       'padding-left:6px;border-left:1px solid rgba(255,255,255,.16)}' +
+    // 표를 눌렀을 때 뜨는 작은 차림표 — 잘못 잡힌 이름을 여기서 뺀다
+    '#rdrPop{position:absolute;display:none;z-index:8;flex-direction:column;min-width:150px;' +
+      'padding:5px;border-radius:12px;background:rgba(14,16,20,.98);' +
+      'border:1px solid rgba(255,255,255,.18);box-shadow:0 8px 26px rgba(0,0,0,.55)}' +
+    '#rdrPop.on{display:flex}' +
+    '#rdrPop b{display:block;font:700 11px/1 inherit;color:#f2b64c;padding:6px 9px 4px}' +
+    '#rdrPop button{border:0;background:none;color:#e9e6e0;text-align:left;cursor:pointer;' +
+      'font:600 12.5px/1 inherit;padding:9px 10px;border-radius:8px}' +
+    '#rdrPop button:hover{background:rgba(255,255,255,.08)}' +
     // 내보내기 차림표
     '#rdrMenu{position:absolute;display:none;right:10px;top:48px;z-index:7;' +
       'flex-direction:column;min-width:150px;padding:5px;border-radius:12px;' +
@@ -6114,25 +6180,36 @@ function rdSelBox() {
   return b;
 }
 
+/** 긁어 둔 자리를 따로 챙겨 둔다.
+ *
+ *  아이패드에서는 팝업의 색을 누르는 순간 긁힌 자리가 풀려 버린다. 그때 가서
+ *  찾으면 이미 늦어, 아무 것도 칠해지지 않았다. 긁는 즉시 자리를 베껴 두고
+ *  칠할 때 그것을 쓴다. */
+function rdKeepSel() {
+  const s = getSelection();
+  if (s && !s.isCollapsed && s.rangeCount &&
+      RD.doc && RD.doc.contains(s.getRangeAt(0).commonAncestorContainer)) {
+    RD.range = s.getRangeAt(0).cloneRange();
+    return true;
+  }
+  return false;
+}
+
 function rdShowTb() {
-  const b = rdSelBox();
-  if (!b) { RD.tb.classList.remove('on'); return; }
-  const host = RD.el.getBoundingClientRect();
-  RD.tb.classList.add('on');
-  const w = RD.tb.offsetWidth || 230, h = RD.tb.offsetHeight || 34;
-  let x = b.left - host.left + b.width / 2 - w / 2;
-  x = Math.max(8, Math.min(host.width - w - 8, x));
-  let y = b.top - host.top - h - 9;
-  if (y < 4) y = b.bottom - host.top + 9;
-  RD.tb.style.left = Math.round(x) + 'px';
-  RD.tb.style.top = Math.round(y) + 'px';
+  if (rdKeepSel()) RD.tb.classList.add('on');
+  else RD.tb.classList.remove('on');
 }
 
 function rdPaint(kind) {
   const sel = getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-  const r = sel.getRangeAt(0);
-  if (!RD.doc.contains(r.commonAncestorContainer)) return;
+  let r = null;
+  if (sel && !sel.isCollapsed && sel.rangeCount &&
+      RD.doc.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+    r = sel.getRangeAt(0);
+  } else if (RD.range && RD.doc.contains(RD.range.commonAncestorContainer)) {
+    r = RD.range;                       // 손이 닿는 순간 풀려 버린 자리를 되살린다
+  }
+  if (!r) return;
   if (kind === 'x') {
     // 걸쳐 있는 형광펜과 밑줄을 벗긴다
     const all = [...RD.doc.querySelectorAll('mark,u')];
@@ -6148,30 +6225,39 @@ function rdPaint(kind) {
     w.appendChild(frag);
     r.insertNode(w);
   }
-  sel.removeAllRanges();
+  try { if (sel) sel.removeAllRanges(); } catch (e) {}
+  RD.range = null;
   RD.tb.classList.remove('on');
   RD.doc.normalize();
   rdSaveNow();
 }
 
 // ── 메모 상자 ───────────────────────────────────────────────
+/** 메모 상자 하나 — 커서가 놓인 덩이 **바로 다음 줄**에 앉는다 */
 function rdAddMemo() {
   const box = document.createElement('div');
   box.className = 'rmemo';
-  box.contentEditable = 'true';
-  box.setAttribute('data-ph', '1');
-  // 커서가 놓인 덩이 뒤에, 없으면 맨 끝에
-  let at = null;
+  box.innerHTML =
+    '<div class="mh" contenteditable="false"><span class="mg">\u2059</span>' +
+    '<span class="sp"></span>' +
+    '<button data-m="fold"></button><button data-m="x">\u2715</button></div>' +
+    '<div class="mb" contenteditable="true"></div>';
+  rdMemoLabel(box);
   const sel = getSelection();
-  if (sel && sel.rangeCount && RD.doc.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-    let n = sel.getRangeAt(0).commonAncestorContainer;
-    if (n.nodeType === 3) n = n.parentElement;
-    while (n && n.parentElement !== RD.doc) n = n.parentElement;
-    at = n;
-  }
-  if (at && at.parentElement === RD.doc) at.after(box); else RD.doc.appendChild(box);
-  box.focus();
+  const at = (sel && sel.rangeCount) ? rdBlockOf(sel.getRangeAt(0).commonAncestorContainer) : null;
+  if (at) at.after(box); else RD.doc.appendChild(box);
+  const mb = box.querySelector('.mb');
+  mb.focus();
+  try {
+    const r = document.createRange(); r.selectNodeContents(mb); r.collapse(true);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  } catch (e) {}
   rdSaveSoon();
+}
+
+function rdMemoLabel(box) {
+  const f = box.querySelector('[data-m="fold"]');
+  if (f) f.textContent = box.classList.contains('fold') ? L.s('펴기', 'Open') : L.s('접기', 'Fold');
 }
 
 /** 메모를 끌어 글 사이로 옮긴다 — 놓이는 자리는 늘 덩이와 덩이 사이다 */
@@ -6180,10 +6266,11 @@ function rdDragMemo(box, ev) {
   const line = document.createElement('div');
   line.className = 'rdrop';
   box.classList.add('drag');
+  const host = box.parentElement || RD.doc;
   const move = e => {
     const y = e.clientY;
     let best = null, bd = 1e9, after = false;
-    for (const c of RD.doc.children) {
+    for (const c of host.children) {
       if (c === box || c === line) continue;
       const r = c.getBoundingClientRect();
       const dTop = Math.abs(y - r.top), dBot = Math.abs(y - r.bottom);
@@ -6203,6 +6290,53 @@ function rdDragMemo(box, ev) {
   addEventListener('pointerup', up);
 }
 
+/** 표를 누르면 뜨는 작은 차림표.
+ *
+ *  글을 훑어 지명을 찾다 보면 「가나안」 속의 「가나」처럼 엉뚱한 이름이
+ *  잡히기도 한다. 셈으로 다 가려낼 수는 없으니, 눌러서 그 자리에서 빼도록
+ *  한다 — 하나만 빼거나, 글 안의 그 이름을 모두 뺀다. */
+function rdPop(go) {
+  const ko = go.getAttribute('data-ko');
+  const pop = document.getElementById('rdrPop');
+  pop.innerHTML = '<b></b>' +
+    '<button data-p="go">' + escapeHTML(L.s('지도에서 보기', 'Show on the map')) + '</button>' +
+    '<button data-p="one">' + escapeHTML(L.s('이 표시만 빼기', 'Remove this mark')) + '</button>' +
+    '<button data-p="all">' + escapeHTML(L.s('이 이름 다 빼기', 'Remove every mark')) + '</button>';
+  pop.querySelector('b').textContent = ko;
+  pop.classList.add('on');
+  const host = RD.el.getBoundingClientRect(), r = go.getBoundingClientRect();
+  const w = pop.offsetWidth || 160, h = pop.offsetHeight || 120;
+  let x = r.left - host.left + r.width / 2 - w / 2;
+  x = Math.max(8, Math.min(host.width - w - 8, x));
+  let y = r.bottom - host.top + 7;
+  if (y + h > host.height - 8) y = r.top - host.top - h - 7;
+  pop.style.left = Math.round(x) + 'px';
+  pop.style.top = Math.round(y) + 'px';
+  pop.onclick = ev => {
+    const t = ev.target.closest('[data-p]');
+    if (!t) return;
+    const act = t.dataset.p;
+    pop.classList.remove('on');
+    if (act === 'go') {
+      const s = siteByName.get(ko);
+      if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); }
+      return;
+    }
+    const list = act === 'all'
+      ? [...RD.doc.querySelectorAll('.rgo')].filter(x => x.getAttribute('data-ko') === ko)
+      : [go];
+    for (const g of list) {
+      const p = g.previousElementSibling;
+      if (p && p.classList.contains('rplace') && p.getAttribute('data-ko') === ko) {
+        p.replaceWith(document.createTextNode(p.textContent));
+      }
+      g.remove();
+    }
+    RD.doc.normalize();
+    rdSaveNow();
+  };
+}
+
 // ── 링크는 그 문단 바로 밑에 ────────────────────────────────
 //
 // 솔직히 — 많은 곳이 남의 화면 안에서 열리기를 거부한다(X-Frame-Options).
@@ -6218,10 +6352,10 @@ function rdFoldLabel(box) {
 function rdOpenLink(href, a) {
   let host = href;
   try { host = new URL(href, location.href).host; } catch (e) {}
-  // 링크가 든 덩이를 찾는다 — 상자는 늘 덩이와 덩이 사이에 앉는다
-  let blk = a || null;
-  while (blk && blk.parentElement !== RD.doc) blk = blk.parentElement;
-  if (!blk) blk = RD.doc.lastElementChild;
+  // 링크가 든 덩이를 찾는다 — 상자는 늘 그 덩이 바로 다음 줄에 앉는다.
+  // 예전에는 판의 바로 아래 자식까지 올라갔는데, 붙여 넣은 글이 겉껍데기
+  // 한 덩이면 그게 곧 글 전체라 상자가 늘 맨 끝으로 갔다.
+  let blk = rdBlockOf(a) || RD.doc.lastElementChild;
   // 이미 펴 둔 것이면 접었다 폈다 한다
   const nx = blk && blk.nextElementSibling;
   if (nx && nx.classList && nx.classList.contains('rlink') && nx.getAttribute('data-href') === href) {
@@ -6239,8 +6373,14 @@ function rdOpenLink(href, a) {
     '<button data-l="new"></button>' +
     '<button data-l="x">\u2715</button></div>' +
     '<div class="lb"><iframe referrerpolicy="no-referrer" ' +
-    'sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe></div>';
-  box.querySelector('u').textContent = host;
+    'sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe></div>' +
+    // 안에서 열리기를 거부하는 곳이 많다. 가려낼 수 없는 경우가 있어,
+    // 빠져나갈 문은 늘 열어 둔다.
+    '<div class="lf" contenteditable="false"><u></u>' +
+    '<button data-l="new">' + escapeHTML(L.s('새 창에서 열기', 'Open in a new tab')) +
+    '</button></div>';
+  box.querySelector('.lh u').textContent = host;
+  box.querySelector('.lf u').textContent = L.s('안 보이면', 'Blank?');
   box.querySelector('[data-l="new"]').textContent = L.s('새 창', 'Open');
   rdFoldLabel(box);
   if (blk) blk.after(box); else RD.doc.appendChild(box);
@@ -6363,17 +6503,23 @@ function rdBind() {
     const t = e.target.closest('[data-hl]');
     if (t) rdPaint(t.dataset.hl);
   });
-  RD.doc.addEventListener('pointerup', () => setTimeout(rdShowTb, 10));
-  RD.doc.addEventListener('keyup', () => setTimeout(rdShowTb, 10));
-  RD.doc.addEventListener('scroll', () => RD.tb.classList.remove('on'));
+  RD.doc.addEventListener('pointerup', () => setTimeout(rdShowTb, 30));
+  RD.doc.addEventListener('keyup', () => setTimeout(rdShowTb, 30));
+  // 손가락으로 긁을 때는 pointerup 이 오지 않는 기기가 있다 — 자리가 바뀌는
+  // 것을 그대로 듣는다.
+  document.addEventListener('selectionchange', () => {
+    if (!document.body.classList.contains('rdr')) return;
+    clearTimeout(RD.selT);
+    RD.selT = setTimeout(rdShowTb, 120);
+  });
 
   // 고친 글은 스스로 저장된다
   RD.doc.addEventListener('input', rdSaveSoon);
 
   // 지명 · 링크 · 메모 손잡이
   RD.doc.addEventListener('pointerdown', e => {
-    const m = e.target.closest('.rmemo');
-    if (m && e.offsetX < 26 && e.target === m) { rdDragMemo(m, e); return; }
+    const g = e.target.closest('.rmemo .mg');
+    if (g) { rdDragMemo(g.closest('.rmemo'), e); return; }
   });
   RD.doc.addEventListener('click', e => {
     const lb = e.target.closest('.rlink [data-l]');
@@ -6387,13 +6533,19 @@ function rdBind() {
     }
     const a = e.target.closest('a[href]');
     if (a) { e.preventDefault(); rdOpenLink(a.getAttribute('href'), a); return; }
-    // 작은 표는 고치는 중에도 눌린다 — 글자와 자리가 다르니 다투지 않는다
-    const g = e.target.closest('.rgo');
-    if (g) {
-      const s = siteByName.get(g.getAttribute('data-ko'));
-      if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); }
+    const mb = e.target.closest('.rmemo [data-m]');
+    if (mb) {
+      const box = mb.closest('.rmemo');
+      if (mb.dataset.m === 'x') box.remove();
+      else { box.classList.toggle('fold'); rdMemoLabel(box); }
+      rdSaveNow();
       return;
     }
+    // 작은 표는 고치는 중에도 눌린다 — 글자와 자리가 다르니 다투지 않는다
+    const g = e.target.closest('.rgo');
+    if (g) { rdPop(g); return; }
+    const pb = e.target.closest('#rdrPop [data-p]');
+    if (pb) return;
     if (RD.edit) return;
     const p = e.target.closest('.rplace');
     if (p) {
@@ -6439,6 +6591,10 @@ function rdBind() {
   });
 
   addEventListener('click', e => {
+    const pop = document.getElementById('rdrPop');
+    if (pop && pop.classList.contains('on') && !e.target.closest('#rdrPop,.rgo')) {
+      pop.classList.remove('on');
+    }
     if (!menu.classList.contains('on')) return;
     if (e.target.closest('#rdrMenu,#rdrShare')) return;
     menu.classList.remove('on');
