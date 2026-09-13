@@ -2356,7 +2356,7 @@ function bindControls() {
   // 손가락을 그림판이 가로채, 단추가 눌리지 않는다.
   const overUI = t => !!(t && t.closest &&
     t.closest('#top, #panel, #gate, #card, #goBtn, #spdBtn, #clrBtn, #mkClrBtn, ' +
-              '#joy, #travel, #eyeh, #bareBtn'));
+              '#joy, #travel, #eyeh, #bareBtn, #dock, #tvTop, #tvBar, #rdr'));
 
   // 지도 위에 떠 있는 이름표와 경로 표지.
   //
@@ -2917,7 +2917,7 @@ qEl.addEventListener('input', () => {
   const found = q.length >= 5 ? scanText(q) : [];
   window.__scan = found;
   window.__pick = null;
-  if (found.length >= 1) head = scanRow();
+  if (found.length >= 1 || (window.__ADMIN && q.length >= 40)) head = scanRow();
   window.__hitRest = out.map((o, i) =>
     '<div class="hit" data-i="' + o.s.i + '">' +
     '<button class="hmark' + (MARKED.has(o.s.ko) ? ' on' : '') + '" data-mark="' + o.s.i + '">' +
@@ -2943,13 +2943,19 @@ function scanRow() {
       escapeHTML(L.place(o.ko)) + '<s>' + escapeHTML(L.region(o.region)) + '</s></button>').join('') +
       '</div>';
   }
+  const title = found.length
+    ? L.s('이 문장에서 ' + found.length + '곳', found.length + ' places in this line')
+    : L.s('붙여 넣은 글', 'Pasted text');
   return '<div class="hit sentence"><b>' +
-    escapeHTML(L.s('이 문장에서 ' + found.length + '곳', found.length + ' places in this line')) +
+    escapeHTML(title) +
     '</b><span class="schips">' + chips + '</span>' + opts +
     '<span class="sbtns">' +
-    '<button data-scan="mark">' + escapeHTML(L.s('표시하기', 'Mark on map')) + '</button>' +
+    // 붙여 넣은 글을 지도 옆에 펴 놓고 읽는다. 아직은 관리자만.
+    (window.__ADMIN ? '<button data-scan="read">' +
+      escapeHTML(L.s('내용 보기', 'Read it')) + '</button>' : '') +
+    (found.length ? '<button data-scan="mark">' + escapeHTML(L.s('표시하기', 'Mark on map')) + '</button>' : '') +
     // 이미 그 길이 지도에 있으면 「경로 만들기」는 접어 둔다
-    (routeIsScan(found) ? '' :
+    (!found.length || routeIsScan(found) ? '' :
       '<button data-scan="route" class="go">' +
       escapeHTML(found.length >= 2 ? L.s('경로 만들기', 'Build route')
                                    : L.s('이 곳으로', 'Go here')) + '</button>') +
@@ -3014,6 +3020,7 @@ hitsEl.addEventListener('click', e => {
   const sc = e.target.closest('[data-scan]');
   if (sc) {
     e.stopPropagation();
+    if (sc.dataset.scan === 'read') { rdOpen(); return; }
     const list = window.__scan || [];
     // 앱과 같다 — 경로는 만들지 않고 색깔로만 짚어 주는 길을 따로 둔다.
     // 같은 곳이 여러 번 나와도 표시는 한 번이면 된다.
@@ -5590,3 +5597,863 @@ function tick() {
     die(L.s('여는 중에 막혔습니다', 'Could not open'), e);
   }
 })();
+
+// ── 따라가는 중에는 화면을 비운다 (휴대폰) ────────────────────
+//
+// 재어 보니 아이폰 세로(375×812)에서 경로를 따라가며 시점으로 걸을 때
+// 알약이 열 줄, 세로 812 px 가운데 508 px(63%)가 도구였다. 끊기지 않고
+// 뚫린 가장 넓은 띠가 280 px(34%)뿐이고, 화면 아래 절반은 사실상 전부
+// 도구였다 — 정작 걸어갈 앞이 거기다.
+//
+// 까닭은 화면이 「지도를 살펴보는 한 가지 상태」만 가정하고 짜여 있어서다.
+// 시점·따라가기를 켜도 지도용 도구가 그대로 남고 그 위에 시점용 도구가
+// 더해진다. 넓은 화면에는 이것들을 구석으로 흩는 규칙이 이미 있는데
+// (min-width:700px) 휴대폰에는 없어서 한가운데 그대로 쌓인다.
+//
+// 그래서 따라가는 동안은 **다른 화면**으로 바꾼다. 동영상 재생기와 같은
+// 규칙이다 — 평소엔 비어 있고, 화면을 한 번 누르면 4초 동안 돌아온다.
+// 남기는 것은 두 줄(위: 남은 거리와 진행 띠, 아래: 멈추기·빠르기·⚙)과
+// 오른쪽 아래 조이스틱. 96 px, 화면의 12%다.
+let tvTop = null, tvBar = null, tvSpdBtn = null, tvPeekT = 0;
+
+function tvPhone() { return innerWidth < 700; }
+
+function makeTravelHUD() {
+  if (tvTop) return;
+
+  tvTop = document.createElement('div');
+  tvTop.id = 'tvTop';
+  tvTop.innerHTML = '<b></b><s><i></i></s>';
+  document.body.appendChild(tvTop);
+
+  tvBar = document.createElement('div');
+  tvBar.id = 'tvBar';
+  const stop = document.createElement('button'); stop.id = 'tvStop';
+  const spd  = document.createElement('button'); spd.id  = 'tvSpd';
+  const gear = document.createElement('button'); gear.id = 'tvGear'; gear.textContent = '⚙';
+  tvBar.appendChild(stop); tvBar.appendChild(spd); tvBar.appendChild(gear);
+  dockEl().appendChild(tvBar);
+  tvSpdBtn = spd;
+
+  onTap(stop, () => {
+    toggleFollow(); syncGoBtn(); updateStopMarks(); syncTravelHUD();
+  });
+  const flip = () => { document.body.classList.toggle('tvset'); };
+  onTap(spd, flip);
+  onTap(gear, flip);
+
+  const st = document.createElement('style');
+  st.textContent =
+    // 위 한 줄 — 어디까지 얼마나 남았는가
+    '#tvTop{position:fixed;left:0;right:0;top:0;z-index:30;display:none;' +
+    'padding:10px 15px 9px;pointer-events:none;' +
+    'background:linear-gradient(rgba(10,11,14,.82),rgba(10,11,14,0))}' +
+    'body.travel #tvTop{display:block}' +
+    '#tvTop b{display:block;font:700 13.5px/1.25 inherit;color:#f4efe4;' +
+    'text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.7)}' +
+    '#tvTop s{display:block;text-decoration:none;height:3px;margin-top:7px;' +
+    'border-radius:2px;background:rgba(255,255,255,.24);overflow:hidden}' +
+    '#tvTop s i{display:block;height:100%;width:0;background:#f2b64c;border-radius:2px;' +
+    'transition:width .25s linear}' +
+    // 아래 한 줄 — 멈추기 · 빠르기 · 펼치기
+    '#tvBar{order:4;display:none;align-items:center;gap:8px}' +
+    'body.travel #tvBar{display:flex}' +
+    '#tvBar button{border:1px solid rgba(255,255,255,.18);cursor:pointer;' +
+    'background:rgba(20,20,24,.9);color:#f4efe4;font:700 13px/1 inherit;' +
+    'height:44px;border-radius:22px;padding:0 15px;' +
+    'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}' +
+    '#tvStop{background:#f2b64c;color:#231702;border-color:transparent;padding:0 19px;' +
+    'box-shadow:0 4px 18px rgba(0,0,0,.45)}' +
+    '#tvSpd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#f2b64c;min-width:62px}' +
+    '#tvGear{width:44px;padding:0;font-size:17px}' +
+    'body.tvset #tvGear{background:#f2b64c;color:#231702;border-color:transparent}' +
+    'body.bare #tvTop,body.bare #tvBar{display:none}' +
+    // 휴대폰에서만 — 넓은 화면 배치는 건드리지 않는다
+    '@media (max-width:699px){' +
+      'body.travel:not(.tvpeek) #top,' +
+      'body.travel:not(.tvpeek) #card,' +
+      'body.travel:not(.tvpeek) #acts{display:none}' +
+      'body.travel #bareBtn{display:none}' +
+      'body.travel:not(.tvset) #travel,' +
+      'body.travel:not(.tvset) #eyeh,' +
+      'body.travel:not(.tvset) #spdBtn{display:none}' +
+      // 조이스틱은 아래 줄 바로 위 오른쪽에 둔다
+      'body.travel #joy{position:fixed;right:14px;bottom:72px;z-index:27;margin:0}' +
+      'body.travel.tvset #joy{display:none}' +
+    '}';
+  document.head.appendChild(st);
+}
+
+/** 따라가는 중 화면을 지금 형편에 맞춘다 */
+function syncTravelHUD() {
+  const on = !!following && !!routePts && routePts.length > 1 && tvPhone();
+  if (on) makeTravelHUD();
+  const b = document.body;
+  if (b.classList.contains('travel') !== on) b.classList.toggle('travel', on);
+  if (!on) {
+    b.classList.remove('tvset');
+    b.classList.remove('tvpeek');
+    return;
+  }
+  const last = routeStops.length ? routeStops[routeStops.length - 1] : null;
+  const left = Math.max(0, followTotal - followKm);
+  const km = left < 1 ? left.toFixed(1) : String(Math.round(left));
+  const txt = last ? L.s(L.place(last.ko) + '까지 ' + km + ' km',
+                         km + ' km to ' + L.place(last.ko))
+                   : km + ' km';
+  const bb = tvTop.querySelector('b');
+  if (bb.textContent !== txt) bb.textContent = txt;
+  const pct = followTotal > 0 ? Math.max(0, Math.min(100, followKm / followTotal * 100)) : 0;
+  tvTop.querySelector('i').style.width = pct.toFixed(1) + '%';
+  const stop = document.getElementById('tvStop');
+  const sl = L.s('■ 멈추기', '■ Stop');
+  if (stop && stop.textContent !== sl) stop.textContent = sl;
+  if (tvSpdBtn) { const s2 = spdLabel(); if (tvSpdBtn.textContent !== s2) tvSpdBtn.textContent = s2; }
+}
+
+// 따라가기를 켜고 끄는 곳이 여럿이라, 그 문 하나를 감싸 두면 어디서 눌러도
+// 화면이 곧바로 따라온다. 남은 거리는 틈틈이 새로 적는다.
+const tvPrevToggle = toggleFollow;
+toggleFollow = function () {
+  const r = tvPrevToggle.apply(null, arguments);
+  try { syncTravelHUD(); } catch (e) {}
+  return r;
+};
+setInterval(() => { try { syncTravelHUD(); } catch (e) {} }, 250);
+
+// 화면을 한 번 누르면 감춰 둔 것이 4초 동안 돌아온다.
+addEventListener('pointerup', ev => {
+  if (!document.body.classList.contains('travel')) return;
+  const t = ev.target;
+  if (t && t.closest && t.closest('#tvBar,#tvTop,#joy,#dock,#top,#panel,#bareBtn')) return;
+  document.body.classList.add('tvpeek');
+  clearTimeout(tvPeekT);
+  tvPeekT = setTimeout(() => document.body.classList.remove('tvpeek'), 4000);
+}, true);
+
+// ── 내용 보기 ──────────────────────────────────────────────
+//
+// 검색칸에 글을 붙여 넣으면 그 문장에서 지명을 찾아 준다. 그런데 정작
+// **붙여 넣은 글 자체**는 어디에도 남지 않았다. 한 줄짜리 칸에 눌려 들어가
+// 보이지도 않고, 다시 읽을 수도 없었다.
+//
+// 그래서 지도 옆에 글을 펴 놓는 판을 하나 둔다. 넓은 화면에서는 오른쪽
+// 절반, 휴대폰에서는 아래에서 올라오는 시트다. 읽고 · 고치고 · 칠하고 ·
+// 메모를 끼우고 · 내보낸다.
+//
+// 첫 번째 벽은 서식이었다. 검색칸은 <input> 이라 붙여 넣는 순간 브라우저가
+// 글자만 남기고 굵기 · 색 · 크기 · 정렬 · 링크를 전부 버린다. 되살릴 길은
+// 하나뿐이다 — **붙여 넣는 그 찰나에 원본을 가로채** 챙겨 두는 것. 붙여넣기
+// 사건에는 글자판 말고 서식판(text/html)이 같이 실려 온다.
+const RD = {
+  html: '', text: '', at: 0,      // 붙여 넣은 원본
+  el: null, doc: null, bar: null, tb: null, link: null, grip: null,
+  edit: false, zoom: 1, snap: 1,  // 시트 단계 (0 손잡이만 · 1 절반 · 2 전체)
+  key: '', saveT: 0, wide: 0.5
+};
+
+function rdPhone() { return innerWidth < 700; }
+
+// ── 붙여 넣은 원본 가로채기 ──────────────────────────────────
+qEl.addEventListener('paste', ev => {
+  try {
+    const cd = ev.clipboardData;
+    if (!cd) return;
+    RD.html = cd.getData('text/html') || '';
+    RD.text = cd.getData('text/plain') || '';
+    RD.at = Date.now();
+  } catch (e) {}
+});
+
+// ── 걸러 내기 ───────────────────────────────────────────────
+//
+// 남의 글에 딸려 온 셈이 이 지도 안에서 돌게 둘 수는 없다. 글의 뼈대와
+// 보이는 모양(크기 · 굵기 · 색 · 정렬)만 남기고 나머지는 버린다.
+const RD_TAG = new Set(['P','DIV','SPAN','BR','H1','H2','H3','H4','H5','H6',
+  'UL','OL','LI','BLOCKQUOTE','PRE','CODE','TABLE','THEAD','TBODY','TR','TD','TH',
+  'B','STRONG','I','EM','U','S','STRIKE','DEL','SUB','SUP','A','IMG','HR','FONT','MARK','SMALL']);
+const RD_CSS = ['font-size','font-weight','font-style','font-family','text-decoration',
+  'text-decoration-line','text-align','color','background-color','line-height',
+  'letter-spacing','margin-left','padding-left','list-style-type','vertical-align'];
+
+function rdClean(html) {
+  const dom = new DOMParser().parseFromString('<div id="r">' + html + '</div>', 'text/html');
+  const root = dom.getElementById('r');
+  if (!root) return '';
+  const walk = el => {
+    for (const c of [...el.children]) {
+      if (!RD_TAG.has(c.tagName)) {
+        // 뼈대가 아닌 것은 알맹이만 살려 제자리에 편다
+        while (c.firstChild) el.insertBefore(c.firstChild, c);
+        c.remove();
+        continue;
+      }
+      const style = c.getAttribute('style') || '';
+      for (const a of [...c.attributes]) c.removeAttribute(a.name);
+      if (style) {
+        const keep = [];
+        for (const part of style.split(';')) {
+          const i = part.indexOf(':');
+          if (i < 0) continue;
+          const k = part.slice(0, i).trim().toLowerCase();
+          const v = part.slice(i + 1).trim();
+          if (!RD_CSS.includes(k)) continue;
+          if (/url\s*\(|expression|javascript:/i.test(v)) continue;
+          keep.push(k + ':' + v);
+        }
+        if (keep.length) c.setAttribute('style', keep.join(';'));
+      }
+      walk(c);
+    }
+  };
+  // 링크와 그림은 주소를 되돌려 준다 (걸러 낸 뒤에)
+  const links = [], imgs = [];
+  const src = new DOMParser().parseFromString('<div id="r">' + html + '</div>', 'text/html');
+  src.querySelectorAll('a').forEach(a => links.push(a.getAttribute('href') || ''));
+  src.querySelectorAll('img').forEach(i => imgs.push(i.getAttribute('src') || ''));
+  walk(root);
+  let li = 0, ii = 0;
+  root.querySelectorAll('a').forEach(a => {
+    const h = links[li++] || '';
+    if (/^(https?:|mailto:)/i.test(h)) { a.setAttribute('href', h); a.setAttribute('target', '_blank'); }
+  });
+  root.querySelectorAll('img').forEach(im => {
+    const s = imgs[ii++] || '';
+    if (/^(https?:|data:image\/)/i.test(s)) im.setAttribute('src', s);
+    else im.remove();
+  });
+  return root.innerHTML;
+}
+
+function rdEscape(t) {
+  return escapeHTML(t).split('\n\n').map(p => '<p>' + p.split('\n').join('<br>') + '</p>').join('');
+}
+
+/** 글의 앞머리로 열쇠 하나 — 같은 글을 다시 붙여 넣으면 칠해 둔 것이 살아난다 */
+function rdKey(text) {
+  const t = (text || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+  return 'theland.read.' + h.toString(36) + '.' + t.length.toString(36);
+}
+
+// ── 판 세우기 ───────────────────────────────────────────────
+function rdMake() {
+  if (RD.el) return;
+  const R = document.createElement('div');
+  R.id = 'rdr';
+  R.innerHTML =
+    '<div id="rdrGrip"><i></i></div>' +
+    '<div id="rdrBar">' +
+      '<button id="rdrMode" class="rw"></button>' +
+      '<button id="rdrMinus">−</button>' +
+      '<button id="rdrZoom" class="ro"></button>' +
+      '<button id="rdrPlus">+</button>' +
+      '<button id="rdrMemo">✎</button>' +
+      '<span class="sp"></span>' +
+      '<button id="rdrShare">↗</button>' +
+      '<button id="rdrClose">✕</button>' +
+    '</div>' +
+    '<div id="rdrDoc"></div>' +
+    '<div id="rdrTb"></div>' +
+    '<div id="rdrMenu"></div>' +
+    '<div id="rdrEdge"></div>';
+  document.body.appendChild(R);
+  RD.el = R;
+  RD.doc  = R.querySelector('#rdrDoc');
+  RD.bar  = R.querySelector('#rdrBar');
+  RD.tb   = R.querySelector('#rdrTb');
+  RD.grip = R.querySelector('#rdrGrip');
+
+  // 형광펜 다섯 색 · 밑줄 · 지우개
+  RD.tb.innerHTML = RD_HL.map((c, i) =>
+      '<b data-hl="' + i + '" style="background:' + c + '"></b>').join('') +
+    '<s data-hl="u">' + escapeHTML(L.s('밑줄', 'Underline')) + '</s>' +
+    '<s data-hl="x">' + escapeHTML(L.s('지우기', 'Clear')) + '</s>';
+
+  rdStyle();
+  rdBind();
+}
+
+const RD_HL = ['#ffe066', '#b7e08a', '#9ad4f0', '#f6a8c8', '#f7bd7a'];
+
+function rdStyle() {
+  const st = document.createElement('style');
+  st.textContent =
+    '#rdr{position:fixed;z-index:34;display:none;flex-direction:column;' +
+    'background:rgba(20,22,26,.96);backdrop-filter:blur(18px);' +
+    '-webkit-backdrop-filter:blur(18px);color:var(--ink);' +
+    'box-shadow:0 -8px 40px rgba(0,0,0,.5)}' +
+    'body.rdr #rdr{display:flex}' +
+    // 넓은 화면 — 오른쪽 절반
+    '@media (min-width:700px){#rdr{top:0;right:0;bottom:0;width:50%;' +
+      'border-left:1px solid rgba(255,255,255,.14)}' +
+      '#rdrGrip{display:none}' +
+      '#rdrEdge{position:absolute;left:-4px;top:0;bottom:0;width:9px;cursor:col-resize;z-index:3}}' +
+    // 휴대폰 — 아래에서 올라오는 시트
+    '@media (max-width:699px){#rdr{left:0;right:0;bottom:0;height:52vh;' +
+      'border-radius:16px 16px 0 0;border-top:1px solid rgba(255,255,255,.14)}' +
+      'body.rdr2 #rdr{height:90vh}body.rdr0 #rdr{height:46px}' +
+      '#rdrEdge{display:none}}' +
+    '#rdrGrip{height:16px;display:flex;align-items:center;justify-content:center;' +
+      'flex:0 0 auto;touch-action:none;cursor:grab}' +
+    '#rdrGrip i{width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.34)}' +
+    // 도구줄
+    '#rdrBar{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:7px 10px;' +
+      'border-bottom:1px solid rgba(255,255,255,.12)}' +
+    '#rdrBar .sp{flex:1}' +
+    '#rdrBar button{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);' +
+      'color:#e9e6e0;font:700 13px/1 inherit;height:34px;min-width:34px;padding:0 9px;' +
+      'border-radius:17px;cursor:pointer}' +
+    '#rdrBar button.rw{padding:0 13px}' +
+    '#rdrBar button.ro{border-color:transparent;background:none;color:#8d867a;' +
+      'font:600 11.5px/1 ui-monospace,monospace;min-width:38px;padding:0}' +
+    '#rdrBar button.on{background:#f2b64c;color:#231702;border-color:transparent}' +
+    // 링크는 그 링크가 든 문단 **바로 밑에** 펼쳐진다.
+    // 위쪽에 따로 칸을 두면 읽던 자리를 잃는다 — 글의 흐름 안에 두고,
+    // 접었다 폈다 할 수 있게 한다.
+    '#rdrDoc .rlink{display:block;margin:12px 0;border-radius:10px;overflow:hidden;' +
+      'border:1px solid rgba(0,0,0,.22);background:#fff}' +
+    '#rdrDoc .rlink .lh{display:flex;align-items:center;gap:7px;padding:6px 8px;' +
+      'background:#e9e6df;font:600 11.5px/1.3 inherit;color:#4b525a}' +
+    '#rdrDoc .rlink .lh u{flex:1;text-decoration:none;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap}' +
+    '#rdrDoc .rlink .lh button{border:1px solid rgba(0,0,0,.24);background:none;' +
+      'color:#1f5f88;font:700 11px/1 inherit;padding:4px 8px;border-radius:11px;cursor:pointer}' +
+    '#rdrDoc .rlink .lb{height:330px;position:relative;background:#fff;overflow:hidden;' +
+      'transition:height .18s ease}' +
+    '#rdrDoc .rlink.fold .lb{height:0}' +
+    '#rdrDoc .rlink iframe{width:100%;height:100%;border:0;display:block}' +
+    '#rdrDoc .rlink .no{position:absolute;inset:0;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;' +
+      'align-items:center;justify-content:center;padding:16px;text-align:center;' +
+      'font:500 12.5px/1.5 inherit;color:#6b7078;background:#f1efe9}' +
+    // 글
+    // 글 판만은 종이빛이다. 붙여 넣은 글의 색은 흰 바탕을 두고 고른 색이라,
+    // 어두운 바탕에 그대로 얹으면 짙은 글씨가 묻혀 읽히지 않는다.
+    '#rdrDoc{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 18px 96px;' +
+      'font:400 15px/1.72 inherit;background:#f7f5f0;color:#20242a;' +
+      'word-break:break-word;outline:none}' +
+    '#rdrDoc a{color:#1a6ea8}' +
+    '#rdrDoc img{max-width:100%;height:auto}' +
+    '#rdrDoc table{border-collapse:collapse}' +
+    '#rdrDoc td,#rdrDoc th{border:1px solid rgba(0,0,0,.2);padding:4px 7px}' +
+    // 지도가 알아본 지명은 눈에 띄게 — 옅은 금빛 알약에 밑줄.
+    // 그 옆에 작은 표를 하나 붙이고, **그 표를 누르면** 지도가 그리로 간다.
+    // 글자 자체를 누르는 자리로 쓰면 고쳐 쓰는 손짓과 다툰다.
+    '#rdrDoc .rplace{color:#6f4a0c;background:rgba(242,182,76,.32);border-radius:5px;' +
+      'padding:0 3px;box-shadow:inset 0 -1.5px 0 rgba(190,134,26,.75)}' +
+    '#rdrDoc .rgo{display:inline-block;width:15px;height:15px;margin:0 3px 0 3px;' +
+      'border-radius:8px;background:#f2b64c;position:relative;cursor:pointer;' +
+      'vertical-align:-2px;box-shadow:0 0 0 2px rgba(242,182,76,.22);' +
+      '-webkit-user-select:none;user-select:none}' +
+    '#rdrDoc .rgo::after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;' +
+      'margin:-2.5px 0 0 -2.5px;border-radius:3px;background:#231702}' +
+    '#rdrDoc .rgo:hover{background:#ffd68f}' +
+    '#rdrDoc mark{border-radius:3px;padding:0 1px;color:#1a1a1a}' +
+    // 메모 상자
+    '#rdrDoc .rmemo{display:block;margin:13px 0;padding:9px 11px 9px 30px;position:relative;' +
+      'border-radius:10px;border:1px dashed #c79a3c;box-sizing:border-box;' +
+      'background:#fdf5e3;color:#4a3a17;min-height:54px;' +
+      'font:400 14px/1.6 inherit;outline:none}' +
+    '#rdrDoc .rmemo::before{content:"\\2059";position:absolute;left:9px;top:8px;' +
+      'color:#c79a3c;font-size:13px;cursor:grab;line-height:1.4}' +
+    '#rdrDoc .rmemo.drag{opacity:.45}' +
+    '#rdrDoc .rdrop{display:block;height:2px;margin:6px 0;background:#c98a1e;border-radius:1px}' +
+    // 긁으면 뜨는 팝업
+    '#rdrTb{position:absolute;display:none;align-items:center;gap:7px;z-index:6;' +
+      'padding:7px 11px;border-radius:20px;background:rgba(14,16,20,.97);' +
+      'border:1px solid rgba(255,255,255,.18);box-shadow:0 6px 22px rgba(0,0,0,.55)}' +
+    '#rdrTb.on{display:flex}' +
+    '#rdrTb b{width:19px;height:19px;border-radius:10px;cursor:pointer;display:block}' +
+    '#rdrTb s{text-decoration:none;color:#e6e9ec;font:700 12px/1 inherit;cursor:pointer;' +
+      'padding-left:6px;border-left:1px solid rgba(255,255,255,.16)}' +
+    // 내보내기 차림표
+    '#rdrMenu{position:absolute;display:none;right:10px;top:48px;z-index:7;' +
+      'flex-direction:column;min-width:150px;padding:5px;border-radius:12px;' +
+      'background:rgba(14,16,20,.98);border:1px solid rgba(255,255,255,.18);' +
+      'box-shadow:0 8px 26px rgba(0,0,0,.55)}' +
+    '#rdrMenu.on{display:flex}' +
+    '#rdrMenu button{border:0;background:none;color:#e9e6e0;text-align:left;cursor:pointer;' +
+      'font:600 13px/1 inherit;padding:10px 11px;border-radius:8px}' +
+    '#rdrMenu button:hover{background:rgba(255,255,255,.08)}' +
+    // 판이 열려 있으면 지도 쪽 단추가 가리지 않게 물러선다
+    '@media (min-width:700px){body.rdr #dock{right:50%;left:0}' +
+      'body.rdr #bareBtn{display:none}}';
+  document.head.appendChild(st);
+}
+
+// ── 판을 열고 닫기 ──────────────────────────────────────────
+function rdOpen() {
+  rdMake();
+  const html = RD.html ? rdClean(RD.html) : '';
+  const text = RD.text || qEl.value || '';
+  RD.key = rdKey(text);
+  let saved = null;
+  try { saved = localStorage.getItem(RD.key); } catch (e) {}
+  RD.doc.innerHTML = saved || html || rdEscape(text);
+  if (!saved) rdMarkPlaces();
+  RD.zoom = 1;
+  try { const z = parseFloat(localStorage.getItem('theland.read.zoom')); if (z >= .8 && z <= 2) RD.zoom = z; } catch (e) {}
+  rdApplyZoom();
+  rdMode(false);
+  document.body.classList.add('rdr');
+  rdSnap(rdPhone() ? 1 : 2);
+  rdSyncBar();
+}
+
+function rdClose() {
+  rdSaveNow();
+  document.body.classList.remove('rdr', 'rdr0', 'rdr2', 'rdredit');
+  if (RD.tb) RD.tb.classList.remove('on');
+  if (RD.doc) RD.doc.querySelectorAll('.rlink').forEach(x => x.remove());
+}
+
+function rdMode(on) {
+  RD.edit = !!on;
+  RD.doc.contentEditable = RD.edit ? 'true' : 'false';
+  document.body.classList.toggle('rdredit', RD.edit);
+  rdSyncBar();
+}
+
+function rdSyncBar() {
+  const m = document.getElementById('rdrMode');
+  if (m) {
+    m.textContent = RD.edit ? L.s('읽기로', 'Read') : L.s('고치기', 'Edit');
+    m.className = 'rw' + (RD.edit ? ' on' : '');
+  }
+  const z = document.getElementById('rdrZoom');
+  if (z) z.textContent = Math.round(RD.zoom * 100) + '%';
+}
+
+function rdApplyZoom() {
+  RD.doc.style.zoom = RD.zoom;
+  // zoom 을 모르는 브라우저를 위한 대비 — 글자 크기만이라도 따라 준다
+  RD.doc.style.fontSize = (15 * (RD.doc.style.zoom ? 1 : RD.zoom)).toFixed(1) + 'px';
+  try { localStorage.setItem('theland.read.zoom', String(RD.zoom)); } catch (e) {}
+  rdSyncBar();
+}
+
+// ── 저장 ────────────────────────────────────────────────────
+function rdSaveNow() {
+  if (!RD.key || !RD.doc) return;
+  // 펴 둔 링크 상자는 담지 않는다 — 다시 열면 죽은 틀만 남는다
+  const c = RD.doc.cloneNode(true);
+  c.querySelectorAll('.rlink').forEach(x => x.remove());
+  try { localStorage.setItem(RD.key, c.innerHTML); } catch (e) {}
+}
+function rdSaveSoon() {
+  clearTimeout(RD.saveT);
+  RD.saveT = setTimeout(rdSaveNow, 600);
+}
+
+// ── 글 속 지명에 밑줄을 깔고, 누르면 지도가 그리로 ──────────
+function rdMarkPlaces() {
+  const list = window.__scan || [];
+  const names = [];
+  const seen = new Set();
+  for (const h of list) {
+    const ko = h.s && h.s.ko;
+    if (!ko || seen.has(ko)) continue;
+    seen.add(ko); names.push(ko);
+  }
+  if (!names.length) return;
+  names.sort((a, b) => b.length - a.length);
+  const walker = document.createTreeWalker(RD.doc, NodeFilter.SHOW_TEXT, null);
+  const jobs = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.parentElement && n.parentElement.closest('a,.rplace,.rmemo')) continue;
+    const t = n.nodeValue;
+    if (!t || !t.trim()) continue;
+    for (const ko of names) if (t.indexOf(ko) >= 0) { jobs.push(n); break; }
+  }
+  for (const n of jobs) {
+    const t = n.nodeValue;
+    const frag = document.createDocumentFragment();
+    let i = 0;
+    while (i < t.length) {
+      let hit = null;
+      for (const ko of names) if (t.startsWith(ko, i)) { hit = ko; break; }
+      if (hit) {
+        const a = document.createElement('span');
+        a.className = 'rplace';
+        a.setAttribute('data-ko', hit);
+        a.textContent = hit;
+        frag.appendChild(a);
+        // 눌러서 지도로 가는 작은 표. 글에 섞이지 않게 고쳐 쓸 수 없게 둔다.
+        const go = document.createElement('span');
+        go.className = 'rgo';
+        go.contentEditable = 'false';
+        go.setAttribute('data-ko', hit);
+        go.setAttribute('title', L.s('지도에서 보기', 'Show on the map'));
+        frag.appendChild(go);
+        i += hit.length;
+      } else {
+        let j = i + 1;
+        while (j < t.length) {
+          let any = false;
+          for (const ko of names) if (t.startsWith(ko, j)) { any = true; break; }
+          if (any) break;
+          j++;
+        }
+        frag.appendChild(document.createTextNode(t.slice(i, j)));
+        i = j;
+      }
+    }
+    n.parentNode.replaceChild(frag, n);
+  }
+}
+
+// ── 긁으면 뜨는 팝업 ────────────────────────────────────────
+function rdSelBox() {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (!RD.doc.contains(r.commonAncestorContainer)) return null;
+  const b = r.getBoundingClientRect();
+  if (!b.width && !b.height) return null;
+  return b;
+}
+
+function rdShowTb() {
+  const b = rdSelBox();
+  if (!b) { RD.tb.classList.remove('on'); return; }
+  const host = RD.el.getBoundingClientRect();
+  RD.tb.classList.add('on');
+  const w = RD.tb.offsetWidth || 230, h = RD.tb.offsetHeight || 34;
+  let x = b.left - host.left + b.width / 2 - w / 2;
+  x = Math.max(8, Math.min(host.width - w - 8, x));
+  let y = b.top - host.top - h - 9;
+  if (y < 4) y = b.bottom - host.top + 9;
+  RD.tb.style.left = Math.round(x) + 'px';
+  RD.tb.style.top = Math.round(y) + 'px';
+}
+
+function rdPaint(kind) {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const r = sel.getRangeAt(0);
+  if (!RD.doc.contains(r.commonAncestorContainer)) return;
+  if (kind === 'x') {
+    // 걸쳐 있는 형광펜과 밑줄을 벗긴다
+    const all = [...RD.doc.querySelectorAll('mark,u')];
+    for (const el of all) {
+      if (!r.intersectsNode(el)) continue;
+      while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+      el.remove();
+    }
+  } else {
+    const frag = r.extractContents();
+    const w = document.createElement(kind === 'u' ? 'u' : 'mark');
+    if (kind !== 'u') w.style.background = RD_HL[+kind] || RD_HL[0];
+    w.appendChild(frag);
+    r.insertNode(w);
+  }
+  sel.removeAllRanges();
+  RD.tb.classList.remove('on');
+  RD.doc.normalize();
+  rdSaveNow();
+}
+
+// ── 메모 상자 ───────────────────────────────────────────────
+function rdAddMemo() {
+  const box = document.createElement('div');
+  box.className = 'rmemo';
+  box.contentEditable = 'true';
+  box.setAttribute('data-ph', '1');
+  // 커서가 놓인 덩이 뒤에, 없으면 맨 끝에
+  let at = null;
+  const sel = getSelection();
+  if (sel && sel.rangeCount && RD.doc.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+    let n = sel.getRangeAt(0).commonAncestorContainer;
+    if (n.nodeType === 3) n = n.parentElement;
+    while (n && n.parentElement !== RD.doc) n = n.parentElement;
+    at = n;
+  }
+  if (at && at.parentElement === RD.doc) at.after(box); else RD.doc.appendChild(box);
+  box.focus();
+  rdSaveSoon();
+}
+
+/** 메모를 끌어 글 사이로 옮긴다 — 놓이는 자리는 늘 덩이와 덩이 사이다 */
+function rdDragMemo(box, ev) {
+  ev.preventDefault();
+  const line = document.createElement('div');
+  line.className = 'rdrop';
+  box.classList.add('drag');
+  const move = e => {
+    const y = e.clientY;
+    let best = null, bd = 1e9, after = false;
+    for (const c of RD.doc.children) {
+      if (c === box || c === line) continue;
+      const r = c.getBoundingClientRect();
+      const dTop = Math.abs(y - r.top), dBot = Math.abs(y - r.bottom);
+      if (dTop < bd) { bd = dTop; best = c; after = false; }
+      if (dBot < bd) { bd = dBot; best = c; after = true; }
+    }
+    if (best) { if (after) best.after(line); else best.before(line); }
+  };
+  const up = () => {
+    removeEventListener('pointermove', move);
+    removeEventListener('pointerup', up);
+    box.classList.remove('drag');
+    if (line.parentNode) { line.parentNode.insertBefore(box, line); line.remove(); }
+    rdSaveNow();
+  };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+}
+
+// ── 링크는 그 문단 바로 밑에 ────────────────────────────────
+//
+// 솔직히 — 많은 곳이 남의 화면 안에서 열리기를 거부한다(X-Frame-Options).
+// 막힌 곳은 틀만 서고 속이 비는데, 그런 틀은 같은 출처(about:blank)로 남아
+// 들여다볼 수 있다. 들여다봐서 비어 있으면 막힌 것이고, 들여다볼 수 없으면
+// (다른 출처라서) 제대로 열린 것이다. 그것으로 가른다.
+function rdFoldLabel(box) {
+  const f = box.querySelector('[data-l="fold"]');
+  if (f) f.textContent = box.classList.contains('fold') ? L.s('펼치기', 'Expand')
+                                                        : L.s('접기', 'Collapse');
+}
+
+function rdOpenLink(href, a) {
+  let host = href;
+  try { host = new URL(href, location.href).host; } catch (e) {}
+  // 링크가 든 덩이를 찾는다 — 상자는 늘 덩이와 덩이 사이에 앉는다
+  let blk = a || null;
+  while (blk && blk.parentElement !== RD.doc) blk = blk.parentElement;
+  if (!blk) blk = RD.doc.lastElementChild;
+  // 이미 펴 둔 것이면 접었다 폈다 한다
+  const nx = blk && blk.nextElementSibling;
+  if (nx && nx.classList && nx.classList.contains('rlink') && nx.getAttribute('data-href') === href) {
+    nx.classList.toggle('fold');
+    rdFoldLabel(nx);
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'rlink';
+  box.contentEditable = 'false';
+  box.setAttribute('data-href', href);
+  box.innerHTML =
+    '<div class="lh"><u></u>' +
+    '<button data-l="fold"></button>' +
+    '<button data-l="new"></button>' +
+    '<button data-l="x">\u2715</button></div>' +
+    '<div class="lb"><iframe referrerpolicy="no-referrer" ' +
+    'sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe></div>';
+  box.querySelector('u').textContent = host;
+  box.querySelector('[data-l="new"]').textContent = L.s('새 창', 'Open');
+  rdFoldLabel(box);
+  if (blk) blk.after(box); else RD.doc.appendChild(box);
+
+  const fr = box.querySelector('iframe');
+  let settled = false;
+  const refuse = () => {
+    if (settled) return;
+    settled = true;
+    const no = document.createElement('div');
+    no.className = 'no';
+    const t = document.createElement('div');
+    t.textContent = L.s('이 곳은 다른 화면 안에서 열리지 않습니다',
+                        'This site refuses to open inside another page');
+    const btn = document.createElement('button');
+    btn.textContent = L.s('새 창에서 열기', 'Open in a new tab');
+    btn.style.cssText = 'border:1px solid rgba(0,0,0,.28);background:none;color:#1f5f88;' +
+      'font:700 12px/1 inherit;padding:9px 14px;border-radius:15px;cursor:pointer';
+    btn.addEventListener('click', () => window.open(href, '_blank', 'noopener'));
+    no.appendChild(t); no.appendChild(btn);
+    box.querySelector('.lb').appendChild(no);
+  };
+  fr.addEventListener('load', () => {
+    let empty = false;
+    try {
+      const d = fr.contentDocument;
+      empty = !!d && (!d.body || !d.body.childNodes.length);
+    } catch (e) { empty = false; }     // 들여다볼 수 없다 = 제대로 열렸다
+    if (empty) refuse(); else settled = true;
+  });
+  fr.src = href;
+  setTimeout(() => { if (!settled) refuse(); }, 2500);
+  try { box.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+}
+
+// ── 내보내기 ────────────────────────────────────────────────
+function rdStamp() {
+  const d = new Date();
+  const p = n => ('0' + n).slice(-2);
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+function rdDrop(blob, name) {
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = u; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(u), 4000);
+}
+function rdNeed(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error(src));
+    document.head.appendChild(s);
+  });
+}
+async function rdExport(kind) {
+  document.getElementById('rdrMenu').classList.remove('on');
+  if (kind === 'txt') {
+    rdDrop(new Blob([RD.doc.innerText], { type: 'text/plain;charset=utf-8' }),
+           '내용-' + rdStamp() + '.txt');
+    return;
+  }
+  if (kind === 'pdf') {
+    const w = window.open('', '_blank');
+    if (!w) { toast(L.s('창을 열지 못했습니다', 'Could not open a window')); return; }
+    w.document.write('<!doctype html><meta charset="utf-8"><title>' + rdStamp() + '</title>' +
+      '<style>body{margin:26px;font:15px/1.7 -apple-system,"Apple SD Gothic Neo",sans-serif;color:#111}' +
+      'mark{padding:0 1px;border-radius:3px}img{max-width:100%}' +
+      '.rmemo{border:1px dashed #c9a24a;background:#fdf6e6;border-radius:8px;padding:8px 11px;margin:12px 0}' +
+      '.rplace{border-bottom:1.5px solid #d8b25a}</style>' +
+      '<body>' + RD.doc.innerHTML + '</body>');
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
+    return;
+  }
+  // 사진 — 스크롤해서 안 보이는 데까지 통째로 한 장
+  toast(L.s('사진으로 담는 중…', 'Rendering…'));
+  try {
+    if (!window.html2canvas) {
+      await rdNeed('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+    }
+    const cv = await window.html2canvas(RD.doc, {
+      backgroundColor: '#15181c', scale: Math.min(2, devicePixelRatio || 1),
+      windowWidth: RD.doc.scrollWidth, height: RD.doc.scrollHeight,
+      scrollX: 0, scrollY: 0, useCORS: true, logging: false
+    });
+    cv.toBlob(b => { if (b) rdDrop(b, '내용-' + rdStamp() + '.png'); }, 'image/png');
+  } catch (e) {
+    toast(L.s('사진으로 담지 못했습니다', 'Could not render the image'));
+  }
+}
+
+// ── 손짓 묶기 ───────────────────────────────────────────────
+function rdBind() {
+  const R = RD.el;
+
+  onTap(document.getElementById('rdrClose'), rdClose);
+  onTap(document.getElementById('rdrMode'), () => rdMode(!RD.edit));
+  onTap(document.getElementById('rdrPlus'),  () => { RD.zoom = Math.min(1.7, RD.zoom + .1); rdApplyZoom(); });
+  onTap(document.getElementById('rdrMinus'), () => { RD.zoom = Math.max(0.85, RD.zoom - .1); rdApplyZoom(); });
+  onTap(document.getElementById('rdrMemo'),  rdAddMemo);
+
+  const menu = document.getElementById('rdrMenu');
+  menu.innerHTML =
+    '<button data-x="txt">' + escapeHTML(L.s('글로 내보내기', 'Export text')) + '</button>' +
+    '<button data-x="png">' + escapeHTML(L.s('사진으로 (전체)', 'Export image')) + '</button>' +
+    '<button data-x="pdf">' + escapeHTML(L.s('PDF 로', 'Export PDF')) + '</button>';
+  onTap(document.getElementById('rdrShare'), () => menu.classList.toggle('on'));
+  menu.addEventListener('click', e => {
+    const b = e.target.closest('[data-x]');
+    if (b) rdExport(b.dataset.x);
+  });
+
+  // 형광펜 팝업
+  // 팝업을 누를 때 긁어 둔 자리가 풀리지 않게 막는다. pointerdown 을 막으면
+  // 뒤따르는 click 까지 함께 죽어 단추가 먹지 않는다 — mousedown 만 막는다.
+  RD.tb.addEventListener('mousedown', e => e.preventDefault());
+  RD.tb.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+  RD.tb.addEventListener('click', e => {
+    const t = e.target.closest('[data-hl]');
+    if (t) rdPaint(t.dataset.hl);
+  });
+  RD.doc.addEventListener('pointerup', () => setTimeout(rdShowTb, 10));
+  RD.doc.addEventListener('keyup', () => setTimeout(rdShowTb, 10));
+  RD.doc.addEventListener('scroll', () => RD.tb.classList.remove('on'));
+
+  // 고친 글은 스스로 저장된다
+  RD.doc.addEventListener('input', rdSaveSoon);
+
+  // 지명 · 링크 · 메모 손잡이
+  RD.doc.addEventListener('pointerdown', e => {
+    const m = e.target.closest('.rmemo');
+    if (m && e.offsetX < 26 && e.target === m) { rdDragMemo(m, e); return; }
+  });
+  RD.doc.addEventListener('click', e => {
+    const lb = e.target.closest('.rlink [data-l]');
+    if (lb) {
+      const box = lb.closest('.rlink');
+      const x = lb.dataset.l;
+      if (x === 'x') box.remove();
+      else if (x === 'new') window.open(box.getAttribute('data-href'), '_blank', 'noopener');
+      else { box.classList.toggle('fold'); rdFoldLabel(box); }
+      return;
+    }
+    const a = e.target.closest('a[href]');
+    if (a) { e.preventDefault(); rdOpenLink(a.getAttribute('href'), a); return; }
+    // 작은 표는 고치는 중에도 눌린다 — 글자와 자리가 다르니 다투지 않는다
+    const g = e.target.closest('.rgo');
+    if (g) {
+      const s = siteByName.get(g.getAttribute('data-ko'));
+      if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); }
+      return;
+    }
+    if (RD.edit) return;
+    const p = e.target.closest('.rplace');
+    if (p) {
+      const s = siteByName.get(p.getAttribute('data-ko'));
+      if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); }
+    }
+  });
+
+  // 휴대폰 시트 — 손잡이를 끌어 전체 / 절반 / 손잡이만
+  let sy = 0, sh = 0;
+  RD.grip.addEventListener('pointerdown', e => {
+    sy = e.clientY; sh = R.getBoundingClientRect().height;
+    RD.grip.setPointerCapture(e.pointerId);
+  });
+  RD.grip.addEventListener('pointerup', e => {
+    const dy = e.clientY - sy;
+    if (Math.abs(dy) < 12) { rdSnap(RD.snap === 2 ? 1 : 2); return; }
+    const h = sh - dy;
+    rdSnap(h > innerHeight * 0.7 ? 2 : h > innerHeight * 0.28 ? 1 : 0);
+  });
+
+  // 넓은 화면 — 가운데 손잡이로 비율 바꾸기
+  const edge = document.getElementById('rdrEdge');
+  edge.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const move = ev => {
+      const w = Math.max(0.3, Math.min(0.72, (innerWidth - ev.clientX) / innerWidth));
+      RD.wide = w;
+      R.style.width = (w * 100).toFixed(1) + '%';
+      const d = document.getElementById('dock');
+      if (d) d.style.right = (w * 100).toFixed(1) + '%';
+    };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  });
+
+  // 화면 크기가 바뀌면 시트 단계도 그 화면에 맞춘다 — 넓은 화면에서 열어 둔 채
+  // 휴대폰 폭으로 좁아지면 시트가 화면을 통째로 덮고 있었다.
+  addEventListener('resize', () => {
+    if (!document.body.classList.contains('rdr')) return;
+    rdSnap(rdPhone() ? (RD.snap === 0 ? 0 : RD.snap === 2 ? 2 : 1) : 2);
+  });
+
+  addEventListener('click', e => {
+    if (!menu.classList.contains('on')) return;
+    if (e.target.closest('#rdrMenu,#rdrShare')) return;
+    menu.classList.remove('on');
+  });
+}
+
+/** 시트 단계 — 0 손잡이만 · 1 절반 · 2 전체.
+ *  높이는 제 자리에 직접 적는다. 갈래(class)에만 맡기면 다른 규칙에 밀린다. */
+function rdSnap(n) {
+  RD.snap = n;
+  document.body.classList.toggle('rdr2', n === 2);
+  document.body.classList.toggle('rdr0', n === 0);
+  if (!RD.el) return;
+  RD.el.style.removeProperty('height');
+  if (rdPhone()) {
+    RD.el.style.setProperty('height', n === 2 ? '90vh' : n === 0 ? '46px' : '52vh', 'important');
+  }
+}
