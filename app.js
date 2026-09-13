@@ -2937,6 +2937,9 @@ qEl.addEventListener('input', () => {
   const found = q.length >= 5 ? scanText(q) : [];
   window.__scan = found;
   window.__pick = null;
+  // 긴 글은 접힌 채로 연다 — 펴 보고 싶으면 「펴기」를 누른다
+  if (q.length > 160 || found.length > 6) document.body.classList.add('hitfold');
+  else if (q.length < 40) document.body.classList.remove('hitfold');
   if (found.length >= 1 || (window.__ADMIN && q.length >= 40)) head = scanRow();
   window.__hitRest = out.map((o, i) =>
     '<div class="hit" data-i="' + o.s.i + '">' +
@@ -2966,10 +2969,15 @@ function scanRow() {
   const title = found.length
     ? L.s('이 문장에서 ' + found.length + '곳', found.length + ' places in this line')
     : L.s('붙여 넣은 글', 'Pasted text');
+  // 긴 글을 붙여 넣으면 찾아 준 이름과 추천이 화면을 덮는다. 접어 둔다.
+  const fold = document.body.classList.contains('hitfold');
   return '<div class="hit sentence"><b>' +
     escapeHTML(title) +
     '</b><span class="schips">' + chips + '</span>' + opts +
     '<span class="sbtns">' +
+    '<button data-scan="fold">' +
+      escapeHTML(fold ? L.s('펴기 \u25be', 'Show \u25be') : L.s('접기 \u25b4', 'Hide \u25b4')) +
+    '</button>' +
     // 붙여 넣은 글을 지도 옆에 펴 놓고 읽는다. 아직은 관리자만.
     (window.__ADMIN ? '<button data-scan="read">' +
       escapeHTML(L.s('내용 보기', 'Read it')) + '</button>' : '') +
@@ -3040,6 +3048,11 @@ hitsEl.addEventListener('click', e => {
   const sc = e.target.closest('[data-scan]');
   if (sc) {
     e.stopPropagation();
+    if (sc.dataset.scan === 'fold') {
+      document.body.classList.toggle('hitfold');
+      refreshScanRow();
+      return;
+    }
     if (sc.dataset.scan === 'read') { rdOpen(); return; }
     const list = window.__scan || [];
     // 앱과 같다 — 경로는 만들지 않고 색깔로만 짚어 주는 길을 따로 둔다.
@@ -5499,6 +5512,14 @@ toastCSS.textContent =
   'backdrop-filter:blur(12px);transition:opacity .5s;text-align:center}';
 document.head.appendChild(toastCSS);
 
+const hitFoldCSS = document.createElement('style');
+hitFoldCSS.textContent =
+  'body.hitfold #hits .hit:not(.sentence){display:none}' +
+  'body.hitfold #hits .schips{display:none}' +
+  'body.hitfold #hits .sopts{display:none}' +
+  '#hits .sbtns [data-scan="fold"]{opacity:.75}';
+document.head.appendChild(hitFoldCSS);
+
 const routeCSS = document.createElement('style');
 routeCSS.textContent =
   '.rbtn{border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--ink);' +
@@ -5890,13 +5911,14 @@ function rdMake() {
       '<button id="rdrMinus">−</button>' +
       '<button id="rdrZoom" class="ro"></button>' +
       '<button id="rdrPlus">+</button>' +
+      '<button id="rdrHl">\u270e\u0332</button>' +
       '<button id="rdrMemo">✎</button>' +
       '<span class="sp"></span>' +
       '<button id="rdrShare">↗</button>' +
       '<button id="rdrClose">✕</button>' +
     '</div>' +
-    '<div id="rdrDoc"></div>' +
     '<div id="rdrTb"></div>' +
+    '<div id="rdrDoc"></div>' +
     '<div id="rdrMenu"></div>' +
     '<div id="rdrPop"></div>' +
     '<div id="rdrEdge"></div>';
@@ -5908,8 +5930,8 @@ function rdMake() {
   RD.grip = R.querySelector('#rdrGrip');
 
   // 형광펜 다섯 색 · 밑줄 · 지우개
-  RD.tb.innerHTML = RD_HL.map((c, i) =>
-      '<b data-hl="' + i + '" style="background:' + c + '"></b>').join('') +
+  RD.tb.innerHTML = '<em>' + escapeHTML(L.s('칠하기', 'Mark')) + '</em>' +
+    RD_HL.map((c, i) => '<b data-hl="' + i + '" style="background:' + c + '"></b>').join('') +
     '<s data-hl="u">' + escapeHTML(L.s('밑줄', 'Underline')) + '</s>' +
     '<s data-hl="x">' + escapeHTML(L.s('지우기', 'Clear')) + '</s>';
 
@@ -5966,6 +5988,22 @@ function rdStyle() {
       'transition:height .18s ease}' +
     '#rdrDoc .rlink.fold .lb{height:0}' +
     '#rdrDoc .rlink iframe{width:100%;height:100%;border:0;display:block}' +
+    // 성구 링크는 바깥을 열지 않는다 — 우리 자료로 그 자리에서 펼친다
+    '#rdrDoc .rverse{display:block;margin:12px 0;border-radius:10px;overflow:hidden;' +
+      'border:1px solid rgba(0,0,0,.2);background:#fffdf7}' +
+    '#rdrDoc .rverse .vh{display:flex;align-items:center;gap:7px;padding:6px 9px;' +
+      'background:#f0ece1;font:700 11.5px/1.3 inherit;color:#6f5a24}' +
+    '#rdrDoc .rverse .vh u{flex:1;text-decoration:none}' +
+    '#rdrDoc .rverse .vh button{border:1px solid rgba(0,0,0,.22);background:none;' +
+      'color:#1f5f88;font:700 11px/1 inherit;padding:4px 8px;border-radius:11px;cursor:pointer}' +
+    '#rdrDoc .rverse .vb{padding:2px 11px 9px}' +
+    '#rdrDoc .rverse .ve{padding:9px 0;border-bottom:1px solid rgba(0,0,0,.09)}' +
+    '#rdrDoc .rverse .ve:last-child{border-bottom:0}' +
+    '#rdrDoc .rverse .ve h4{margin:0 0 3px;font:700 13.5px/1.4 inherit;color:#23262b}' +
+    '#rdrDoc .rverse .ve p{margin:0;font:400 13px/1.62 inherit;color:#40454b}' +
+    '#rdrDoc .rverse .ve i{font-style:normal;font:600 11.5px/1 ui-monospace,monospace;color:#8a6a1e}' +
+    '#rdrDoc .rverse .ve b{cursor:pointer;font:700 11.5px/1 inherit;color:#6f4a0c;' +
+      'background:rgba(242,182,76,.32);border-radius:5px;padding:2px 6px;margin-right:6px}' +
     '#rdrDoc .rlink .lf{display:flex;align-items:center;gap:8px;padding:5px 9px;' +
       'background:#e9e6df;border-top:1px solid rgba(0,0,0,.14);' +
       'font:500 11px/1.3 inherit;color:#6b7078}' +
@@ -5989,7 +6027,8 @@ function rdStyle() {
     // 그 옆에 작은 표를 하나 붙이고, **그 표를 누르면** 지도가 그리로 간다.
     // 글자 자체를 누르는 자리로 쓰면 고쳐 쓰는 손짓과 다툰다.
     '#rdrDoc .rplace{color:#6f4a0c;background:rgba(242,182,76,.32);border-radius:5px;' +
-      'padding:0 3px;box-shadow:inset 0 -1.5px 0 rgba(190,134,26,.75)}' +
+      'padding:0 3px;box-shadow:inset 0 -1.5px 0 rgba(190,134,26,.75);cursor:pointer}' +
+    'body.rdredit #rdrDoc .rplace{cursor:text}' +
     '#rdrDoc .rgo{display:inline-block;width:15px;height:15px;margin:0 3px 0 3px;' +
       'border-radius:8px;background:#f2b64c;position:relative;cursor:pointer;' +
       'vertical-align:-2px;box-shadow:0 0 0 2px rgba(242,182,76,.22);' +
@@ -6012,15 +6051,17 @@ function rdStyle() {
     '#rdrDoc .rmemo.drag{opacity:.45}' +
     '#rdrDoc .rdrop{display:block;height:2px;margin:6px 0;background:#c98a1e;border-radius:1px}' +
     // 긁으면 뜨는 팝업
-    // 긁은 자리 바로 위에 띄웠더니 기기가 띄우는 「복사 · 붙여넣기」 띠와
-    // 겹쳐 서로를 가렸다. 판 **아래쪽에 붙박이**로 둔다 — 겹칠 일이 없고,
-    // 손이 닿는 자리이기도 하다.
-    '#rdrTb{position:absolute;display:none;align-items:center;gap:9px;z-index:9;' +
-      'left:50%;transform:translateX(-50%);bottom:16px;' +
-      'padding:9px 13px;border-radius:23px;background:rgba(14,16,20,.98);' +
-      'border:1px solid rgba(255,255,255,.22);box-shadow:0 8px 26px rgba(0,0,0,.6)}' +
-    '#rdrTb.on{display:flex}' +
-    '#rdrTb b{width:24px;height:24px;border-radius:13px;cursor:pointer;display:block;' +
+    // 색을 떠다니는 팝업에 두었더니 기기가 띄우는 「복사 · 붙여넣기」 띠와
+    // 겹치고, 누르는 순간 긁힌 자리가 풀려 아무것도 칠해지지 않았다.
+    // **도구줄 안으로** 들여왔다 — 떠다니지 않으니 겹칠 일이 없고,
+    // 늘 같은 자리에 있어 손이 헤매지 않는다.
+    '#rdrTb{display:none;flex:0 0 auto;align-items:center;gap:10px;' +
+      'padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.12);' +
+      'background:rgba(255,255,255,.05)}' +
+    'body.rdrhl #rdrTb{display:flex}' +
+    'body.rdrhl #rdrHl{background:#f2b64c;color:#231702;border-color:transparent}' +
+    '#rdrTb em{font-style:normal;font:600 11px/1 inherit;color:#8d867a;margin-right:2px}' +
+    '#rdrTb b{width:26px;height:26px;border-radius:14px;cursor:pointer;display:block;' +
       'box-shadow:0 0 0 1px rgba(0,0,0,.35)}' +
     '#rdrTb s{text-decoration:none;color:#e6e9ec;font:700 12px/1 inherit;cursor:pointer;' +
       'padding-left:6px;border-left:1px solid rgba(255,255,255,.16)}' +
@@ -6032,6 +6073,10 @@ function rdStyle() {
     '#rdrPop b{display:block;font:700 11px/1 inherit;color:#f2b64c;padding:6px 9px 4px}' +
     '#rdrPop button{border:0;background:none;color:#e9e6e0;text-align:left;cursor:pointer;' +
       'font:600 12.5px/1 inherit;padding:9px 10px;border-radius:8px}' +
+    '#rdrPop .row{display:flex;gap:5px;padding:2px 4px 5px}' +
+    '#rdrPop .row button{flex:1;text-align:center;padding:8px 4px;' +
+      'border:1px solid rgba(255,255,255,.2);font-size:12px}' +
+    '#rdrPop .row button.sel{background:#f2b64c;color:#231702;border-color:transparent}' +
     '#rdrPop button:hover{background:rgba(255,255,255,.08)}' +
     // 내보내기 차림표
     '#rdrMenu{position:absolute;display:none;right:10px;top:48px;z-index:7;' +
@@ -6070,7 +6115,7 @@ function rdOpen() {
 function rdClose() {
   rdSaveNow();
   document.body.classList.remove('rdr', 'rdr0', 'rdr2', 'rdredit');
-  if (RD.tb) RD.tb.classList.remove('on');
+  document.body.classList.remove('rdrhl');
   if (RD.doc) RD.doc.querySelectorAll('.rlink').forEach(x => x.remove());
 }
 
@@ -6196,8 +6241,9 @@ function rdKeepSel() {
 }
 
 function rdShowTb() {
-  if (rdKeepSel()) RD.tb.classList.add('on');
-  else RD.tb.classList.remove('on');
+  // 자리를 잡으면 색 줄을 저절로 편다. 자리가 풀려도 **접지 않는다** —
+  // 색을 누르러 가는 동안 줄이 사라지면 누를 것이 없다.
+  if (rdKeepSel()) document.body.classList.add('rdrhl');
 }
 
 function rdPaint(kind) {
@@ -6227,7 +6273,6 @@ function rdPaint(kind) {
   }
   try { if (sel) sel.removeAllRanges(); } catch (e) {}
   RD.range = null;
-  RD.tb.classList.remove('on');
   RD.doc.normalize();
   rdSaveNow();
 }
@@ -6298,7 +6343,14 @@ function rdDragMemo(box, ev) {
 function rdPop(go) {
   const ko = go.getAttribute('data-ko');
   const pop = document.getElementById('rdrPop');
+  const site = siteByName.get(ko);
+  const slot = site ? slotOf(site) : null;
   pop.innerHTML = '<b></b>' +
+    (site ? '<div class="row">' +
+      '<button data-p="start"' + (slot === 'start' ? ' class="sel"' : '') + '>' + escapeHTML(L.s('출발', 'Start')) + '</button>' +
+      '<button data-p="via"' + (slot === 'via' ? ' class="sel"' : '') + '>' + escapeHTML(L.s('경유', 'Via')) + '</button>' +
+      '<button data-p="end"' + (slot === 'end' ? ' class="sel"' : '') + '>' + escapeHTML(L.s('도착', 'End')) + '</button>' +
+      '</div>' : '') +
     '<button data-p="go">' + escapeHTML(L.s('지도에서 보기', 'Show on the map')) + '</button>' +
     '<button data-p="one">' + escapeHTML(L.s('이 표시만 빼기', 'Remove this mark')) + '</button>' +
     '<button data-p="all">' + escapeHTML(L.s('이 이름 다 빼기', 'Remove every mark')) + '</button>';
@@ -6317,6 +6369,17 @@ function rdPop(go) {
     if (!t) return;
     const act = t.dataset.p;
     pop.classList.remove('on');
+    if (act === 'start' || act === 'via' || act === 'end') {
+      const s = siteByName.get(ko);
+      if (s) {
+        assign(s, act);                       // 길도 그 자리에서 다시 그려진다
+        updateStopMarks(); updateLabels();
+        toast(L.s(L.place(ko) + ' \u00b7 ' +
+                  (act === 'start' ? '출발' : act === 'via' ? '경유' : '도착'),
+                  L.place(ko) + ' \u00b7 ' + act));
+      }
+      return;
+    }
     if (act === 'go') {
       const s = siteByName.get(ko);
       if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); }
@@ -6349,7 +6412,87 @@ function rdFoldLabel(box) {
                                                         : L.s('접기', 'Collapse');
 }
 
+/** 성구 링크인가 — 그렇다면 어떤 성구인가 */
+function rdVerseOf(href) {
+  if (!/wol\.jw\.org/.test(href)) return null;
+  const m = /[?&]q=([^&]+)/.exec(href);
+  if (!m) return null;
+  try { return decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch (e) { return null; }
+}
+
+/** 그 성구가 걸린 우리 사건들을 찾는다 (책 이름 + 장까지만 맞춘다) */
+function rdVerseHits(ref) {
+  const keys = [];
+  for (const one of String(ref).split(/[;,]/)) {
+    const t = one.trim();
+    const m = /^(.+?)\s*(\d+)\s*:/.exec(t);
+    if (m) keys.push(m[1].trim() + ' ' + m[2] + ':');
+  }
+  if (!keys.length) return [];
+  const out = [], seen = new Set();
+  for (const e of EVENTS) {
+    if (!e.ref) continue;
+    const r = String(e.ref).replace(/\s+/g, ' ');
+    for (const k of keys) {
+      if (r.indexOf(k) < 0) continue;
+      const id = e.place + '\u0000' + e.title;
+      if (seen.has(id)) break;
+      seen.add(id); out.push(e);
+      break;
+    }
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+/** 성구 상자 — 바깥을 열지 않고 우리 자료를 그 자리에 편다.
+ *
+ *  바깥 글은 두 겹으로 막혀 있다. 틀 안에 넣는 것도(X-Frame-Options),
+ *  글만 받아 오는 것도(CORS 머리글이 없다) 그쪽이 거부한다. 그것을 뚫는
+ *  일은 남이 세워 둔 문을 억지로 여는 일이고, 이 지도의 규칙(본문을 그대로
+ *  옮기지 않는다)에도 어긋난다. 대신 **우리가 쓴 것**을 보여 준다. */
+function rdVerseBox(ref, a) {
+  const hits = rdVerseHits(ref);
+  if (!hits.length) return false;
+  const blk = rdBlockOf(a) || RD.doc.lastElementChild;
+  const nx = blk && blk.nextElementSibling;
+  if (nx && nx.classList && nx.classList.contains('rverse') && nx.getAttribute('data-q') === ref) {
+    nx.remove(); return true;                    // 다시 누르면 접힌다
+  }
+  const box = document.createElement('div');
+  box.className = 'rverse';
+  box.contentEditable = 'false';
+  box.setAttribute('data-q', ref);
+  box.innerHTML = '<div class="vh"><u></u>' +
+    '<button data-v="out"></button><button data-v="x">\u2715</button></div>' +
+    '<div class="vb"></div>';
+  box.querySelector('.vh u').textContent = ref + ' \u00b7 ' + L.s(hits.length + '건', hits.length);
+  box.querySelector('[data-v="out"]').textContent = L.s('본문 열기', 'Open text');
+  const vb = box.querySelector('.vb');
+  for (const e of hits) {
+    const d = document.createElement('div');
+    d.className = 've';
+    const h = document.createElement('h4');
+    h.textContent = (L.cur === 'en' && e.titleEn) ? e.titleEn : e.title;
+    const p = document.createElement('p');
+    const chip = document.createElement('b');
+    chip.textContent = L.place(e.place);
+    chip.setAttribute('data-go', e.place);
+    p.appendChild(chip);
+    p.appendChild(document.createTextNode((L.cur === 'en' && e.textEn) ? e.textEn : e.text));
+    const i = document.createElement('i');
+    i.textContent = L.ref(e.ref);
+    d.appendChild(h); d.appendChild(p); d.appendChild(document.createElement('br')); d.appendChild(i);
+    vb.appendChild(d);
+  }
+  if (blk) blk.after(box); else RD.doc.appendChild(box);
+  try { box.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+  return true;
+}
+
 function rdOpenLink(href, a) {
+  const q = rdVerseOf(href);
+  if (q && rdVerseBox(q, a)) return;
   let host = href;
   try { host = new URL(href, location.href).host; } catch (e) {}
   // 링크가 든 덩이를 찾는다 — 상자는 늘 그 덩이 바로 다음 줄에 앉는다.
@@ -6436,10 +6579,20 @@ function rdNeed(src) {
     document.head.appendChild(s);
   });
 }
+/** 내보낼 때 쓸 **깨끗한 사본** — 화면에서만 쓰는 단추와 틀은 뺀다 */
+function rdCleanClone() {
+  const c = RD.doc.cloneNode(true);
+  c.querySelectorAll('.rlink,.rgo,.rmemo .mh,#rdrTb,#rdrPop').forEach(x => x.remove());
+  c.querySelectorAll('.rverse .vh button').forEach(x => x.remove());
+  c.querySelectorAll('.rmemo').forEach(x => x.classList.remove('fold'));
+  c.querySelectorAll('[contenteditable]').forEach(x => x.removeAttribute('contenteditable'));
+  return c;
+}
+
 async function rdExport(kind) {
   document.getElementById('rdrMenu').classList.remove('on');
   if (kind === 'txt') {
-    rdDrop(new Blob([RD.doc.innerText], { type: 'text/plain;charset=utf-8' }),
+    rdDrop(new Blob([rdCleanClone().innerText], { type: 'text/plain;charset=utf-8' }),
            '내용-' + rdStamp() + '.txt');
     return;
   }
@@ -6450,8 +6603,14 @@ async function rdExport(kind) {
       '<style>body{margin:26px;font:15px/1.7 -apple-system,"Apple SD Gothic Neo",sans-serif;color:#111}' +
       'mark{padding:0 1px;border-radius:3px}img{max-width:100%}' +
       '.rmemo{border:1px dashed #c9a24a;background:#fdf6e6;border-radius:8px;padding:8px 11px;margin:12px 0}' +
-      '.rplace{border-bottom:1.5px solid #d8b25a}</style>' +
-      '<body>' + RD.doc.innerHTML + '</body>');
+      '.rplace{background:rgba(242,182,76,.3);border-radius:4px;padding:0 3px}' +
+      '.rverse{border:1px solid #ccc;border-radius:8px;margin:12px 0}' +
+      '.rverse .vh{background:#f0ece1;padding:6px 9px;font-weight:700;font-size:12px}' +
+      '.rverse .vb{padding:2px 11px 9px}.rverse h4{margin:8px 0 3px;font-size:14px}' +
+      '.rverse p{margin:0;font-size:13px}.rverse i{font-style:normal;font-size:11.5px;color:#8a6a1e}' +
+      '.rverse b{background:rgba(242,182,76,.3);border-radius:4px;padding:1px 5px;margin-right:5px}' +
+      '</style>' +
+      '<body>' + rdCleanClone().innerHTML + '</body>');
     w.document.close();
     setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
     return;
@@ -6463,6 +6622,12 @@ async function rdExport(kind) {
       await rdNeed('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
     }
     const cv = await window.html2canvas(RD.doc, {
+      onclone: d => {
+        const n = d.getElementById('rdrDoc');
+        if (!n) return;
+        n.querySelectorAll('.rlink,.rgo,.rmemo .mh,.rverse .vh button').forEach(x => x.remove());
+        n.querySelectorAll('.rmemo').forEach(x => x.classList.remove('fold'));
+      },
       backgroundColor: '#15181c', scale: Math.min(2, devicePixelRatio || 1),
       windowWidth: RD.doc.scrollWidth, height: RD.doc.scrollHeight,
       scrollX: 0, scrollY: 0, useCORS: true, logging: false
@@ -6495,13 +6660,22 @@ function rdBind() {
   });
 
   // 형광펜 팝업
-  // 팝업을 누를 때 긁어 둔 자리가 풀리지 않게 막는다. pointerdown 을 막으면
-  // 뒤따르는 click 까지 함께 죽어 단추가 먹지 않는다 — mousedown 만 막는다.
-  RD.tb.addEventListener('mousedown', e => e.preventDefault());
-  RD.tb.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
-  RD.tb.addEventListener('click', e => {
+  // 손짓을 막지 않는다. touchstart 를 막으면 아이패드에서 뒤따르는 click 이
+  // 통째로 죽어 색을 눌러도 아무 일이 없었다. 긁어 둔 자리는 따로 베껴 두니
+  // 막을 까닭도 없다.
+  let hlAt = 0;
+  const hlHit = e => {
     const t = e.target.closest('[data-hl]');
-    if (t) rdPaint(t.dataset.hl);
+    if (!t) return;
+    if (Date.now() - hlAt < 600) return;
+    hlAt = Date.now();
+    rdPaint(t.dataset.hl);
+  };
+  RD.tb.addEventListener('pointerup', hlHit);
+  RD.tb.addEventListener('click', hlHit);
+  onTap(document.getElementById('rdrHl'), () => {
+    document.body.classList.toggle('rdrhl');
+    if (document.body.classList.contains('rdrhl')) rdKeepSel();
   });
   RD.doc.addEventListener('pointerup', () => setTimeout(rdShowTb, 30));
   RD.doc.addEventListener('keyup', () => setTimeout(rdShowTb, 30));
@@ -6531,6 +6705,17 @@ function rdBind() {
       else { box.classList.toggle('fold'); rdFoldLabel(box); }
       return;
     }
+    const vb2 = e.target.closest('.rverse [data-v]');
+    if (vb2) {
+      const box = vb2.closest('.rverse');
+      if (vb2.dataset.v === 'x') box.remove();
+      else window.open('https://wol.jw.org/ko/wol/l/r8/lp-ko?q=' +
+                       encodeURIComponent(box.getAttribute('data-q')), '_blank', 'noopener');
+      return;
+    }
+    const vg = e.target.closest('.rverse [data-go]');
+    if (vg) { const s = siteByName.get(vg.getAttribute('data-go'));
+              if (s) { flyTo(s); showCard(s); highlight = s.ko; updateLabels(); } return; }
     const a = e.target.closest('a[href]');
     if (a) { e.preventDefault(); rdOpenLink(a.getAttribute('href'), a); return; }
     const mb = e.target.closest('.rmemo [data-m]');
@@ -6547,6 +6732,7 @@ function rdBind() {
     const pb = e.target.closest('#rdrPop [data-p]');
     if (pb) return;
     if (RD.edit) return;
+    // 이름 자체를 누르면 **바로** 그 곳으로 — 차림표는 옆의 표가 맡는다
     const p = e.target.closest('.rplace');
     if (p) {
       const s = siteByName.get(p.getAttribute('data-ko'));
