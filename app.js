@@ -45,7 +45,9 @@ window.addEventListener('error', ev => { if (boot.style.display !== 'none') die(
 
 // ── 말 ────────────────────────────────────────────────────
 const L = {
-  cur: (localStorage.getItem('theland.lang') === 'en') ? 'en' : 'ko',
+  // 창고(localStorage)가 막힌 브라우저도 있다 — 여기서 죽으면 아무것도 안 뜬다
+  cur: (function () { try { return localStorage.getItem('theland.lang') === 'en' ? 'en' : 'ko'; }
+                      catch (e) { return 'ko'; } })(),
   s(ko, en) { return this.cur === 'ko' ? ko : en; },
   place(ko) { return this.cur === 'ko' ? ko : (I18N.place[ko] || ko); },
   region(ko) { return this.cur === 'ko' ? ko : (I18N.region[ko] || I18N.place[ko] || ko); },
@@ -3082,7 +3084,7 @@ hitsEl.addEventListener('click', e => {
 // ── 단추 ──────────────────────────────────────────────────
 document.getElementById('langBtn').onclick = () => {
   L.cur = L.cur === 'ko' ? 'en' : 'ko';
-  localStorage.setItem('theland.lang', L.cur);
+  try { localStorage.setItem('theland.lang', L.cur); } catch (e) {}
   applyLang();
 };
 // 처음 단추에도 글자를 붙인다
@@ -3101,7 +3103,7 @@ function applyLang() {
     '<i>' + svgIco(ICO.home) + '</i><u class="big">' + L.s('예루살렘', 'Jerusalem') + '</u>';
   syncToolLabels();
   syncTravel();
-  document.title = L.s('약속의 땅', 'The Promised Land');
+  document.title = L.s('좋은 땅', 'The Good Land');
   qEl.placeholder = L.s('지명 · 인물 · 낱말 또는 문장을 입력하세요',
                         'Type a place, a person, a word — or a whole line');
   qEl.dispatchEvent(new Event('input'));
@@ -4058,7 +4060,19 @@ let runnerEl = null;
 // 눈금은 **곱셈으로** 늘어나므로 왼쪽은 촘촘하고 오른쪽은 성큼성큼 뛴다.
 // 처음 자리는 게이지의 5 % — 예전의 ×1 과 같은 빠르기다.
 const SPD_MIN = 0.75, SPD_MAX = 200;
-const FOLLOW_BASE = 3.0;           // ×1 일 때 길 위를 초속 3 km 로 간다
+// ×1 일 때의 밑바탕 빠르기(km/초)는 **길이에 맞춘다** — 한 판을 마흔 초쯤에
+// 걷되, 아무리 짧아도 초속 0.6 km 아래로는 안 내려가고(9 km 길이 15초),
+// 아무리 길어도 초속 2.2 km 위로는 안 올라간다(그 위는 게이지로 올린다).
+// 예전에는 길이와 무관하게 초속 3 km 였다. 그래서 예루살렘에서 베들레헴까지가
+// 세 초에 끝났다 — 걷는 것이 아니라 눈 깜짝할 새였다.
+// 새로 고친 따라가기는 아직 **관리용으로 들어왔을 때만** 돌린다.
+// 손에 익어 다들 써도 되겠거든 이 문 하나만 늘 참으로 두면 된다.
+function followNew() { return !!window.__ADMIN; }
+function followBase() {
+  if (!followNew()) return 3.0;          // 예전 그대로 — 길이와 무관하게 초속 3 km
+  const km = followTotal > 0 ? followTotal : 60;
+  return Math.max(0.6, Math.min(2.2, km / 40));
+}
 let spdP = 0.05;
 try {
   const v = parseFloat(localStorage.getItem('theland.spd'));
@@ -4370,6 +4384,24 @@ document.head.appendChild(markCSS);
 // 길을 그려 놓고 보기만 하면 지도지, 여정이 아니다. 길 위를 실제로 걸어야
 // 골짜기와 고개가 눈에 들어온다. 카메라를 길 위에 얹고 앞을 보게 한다.
 let following = false, followKm = 0, followTotal = 0, lastT = 0, lastStop = -1;
+// 정거장마다 길 위 몇 km 자리인가 — 따라가기를 켤 때 한 번 재어 둔다.
+// 예전에는 「4 km 안에 들어왔나」로 잤는데, 빠르게 갈 때는 한 틀에 10 km 씩
+// 뛰어 정거장을 지나쳐 버려 카드가 안 떴다. km 로 재면 아무리 빨라도 안 놓친다.
+let followStopKm = [];
+function measureStops() {
+  followStopKm = [];
+  if (!routePts || routePts.length < 2) return;
+  const cum = [0];
+  for (let i = 1; i < routePts.length; i++) cum.push(cum[i - 1] + kmLL(routePts[i - 1], routePts[i]));
+  for (const s of routeStops) {
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < routePts.length; i++) {
+      const d = Math.hypot((routePts[i].lon - s.lon) * KM_LON, (routePts[i].lat - s.lat) * KM_LAT);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    followStopKm.push(cum[bi]);
+  }
+}
 // 따라가는 중에 손으로 돌려본 만큼 — 나아가는 쪽에서 얼마나 비껴 보는가
 let followAzOff = 0;
 
@@ -4400,6 +4432,7 @@ function toggleFollow() {
   following = !following;
   if (following) {
     followTotal = routeLenTo(routePts.length - 1);
+    measureStops();
     if (followKm >= followTotal - 0.5) followKm = 0;
     lastT = performance.now(); lastStop = -1; followAzOff = 0;
     cam.dist = Math.min(cam.dist, 26);
@@ -4428,8 +4461,15 @@ function stepFollow() {
   // 내려도 한 초에 백 킬로미터씩 흘렀다 — 게이지가 아무 뜻이 없었다.
   // 이제 밑바탕은 초속 3 km 하나로 두고, **게이지가 곱하는 몫이 곧
   // 빠르기다.** 긴 길은 게이지를 올려서 넘긴다.
-  followKm += dt * FOLLOW_BASE * spdMul();
-  if (followKm >= followTotal) { followKm = followTotal; following = false; }
+  followKm += dt * followBase() * spdMul();
+  if (followKm >= followTotal) {
+    followKm = followTotal; following = false;
+    // 다 왔으면 단추와 표식도 그 자리에서 제자리로 — 다음 틈을 기다리지 않는다
+    if (followNew()) {
+      try { syncGoBtn(); syncRunner(); } catch (e) {}
+      try { toast(L.s('다 왔습니다', 'Arrived')); } catch (e) {}
+    }
+  }
 
   const p = followAt(followKm);
   cam.tx = worldX(p.lon); cam.tz = worldZ(p.lat);
@@ -4444,11 +4484,24 @@ function stepFollow() {
   }
   applyCam();
 
-  for (let i = 0; i < routeStops.length; i++) {
-    if (i <= lastStop) continue;
-    const s = routeStops[i];
-    if (Math.hypot(worldX(s.lon) - cam.tx, worldZ(s.lat) - cam.tz) < 4) {
-      lastStop = i; showCard(s); break;
+  if (followNew()) {
+    // 정거장 2 km 앞에서 카드를 편다 — 다가가며 읽을 틈이 있게.
+    // 한 틈에 여럿을 지나쳤으면 맨 나중 것만 편다.
+    let hit = -1;
+    for (let i = lastStop + 1; i < routeStops.length; i++) {
+      const at = followStopKm[i];
+      if (at == null || followKm + 2 < at) break;
+      hit = i;
+    }
+    if (hit >= 0) { lastStop = hit; showCard(routeStops[hit]); }
+  } else {
+    // 예전 방식 — 가까이 왔나로 잰다 (빠를 때는 지나친다)
+    for (let i = 0; i < routeStops.length; i++) {
+      if (i <= lastStop) continue;
+      const s = routeStops[i];
+      if (Math.hypot(worldX(s.lon) - cam.tx, worldZ(s.lat) - cam.tz) < 4) {
+        lastStop = i; showCard(s); break;
+      }
     }
   }
 }
@@ -6020,6 +6073,9 @@ function rdStyle() {
       'transition:height .18s ease}' +
     '#rdrDoc .rlink.fold .lb{height:0}' +
     '#rdrDoc .rlink iframe{width:100%;height:100%;border:0;display:block}' +
+    // 집(앱)이 진짜 글을 얹어 줄 칸. 얹히기 전까지만 이 글이 보인다.
+    '#rdrDoc .rlink .ls{position:absolute;inset:0;display:flex;align-items:center;' +
+      'justify-content:center;background:#fff;color:#9aa0a8;font-size:12.5px}' +
     // 성구 링크는 바깥을 열지 않는다 — 우리 자료로 그 자리에서 펼친다
     '#rdrDoc .rverse{display:block;margin:12px 0;border-radius:10px;overflow:hidden;' +
       'border:1px solid rgba(0,0,0,.2);background:#fffdf7}' +
@@ -6761,21 +6817,6 @@ function rdLinkSaved(href) {
   try { return localStorage.getItem(rdLinkKey(href)) || ''; } catch (e) { return ''; }
 }
 
-/** 이 링크는 판 안에서 펼 길이 아주 없는가?
- *  담아 둔 것도 없고, 우리 자료로 펼 수도 없고, 틀에도 안 들어오는 곳. */
-/** 이 링크는 판 안에서 펼 길이 아주 없는가?
- *
- *  담아 둔 것이 있으면 그것을 편다. 그 밖에는, 안에서 열리지 않는 곳이면
- *  **누른 대로 열어 준다.** 예전에는 우리 기록이 있으면 링크를 막고 카드를
- *  대신 띄웠는데 — 링크를 눌렀으면 링크가 열려야 한다. 우리 기록은 상자
- *  바닥에서 원할 때 편다. */
-function rdOpensAway(href, a) {
-  try {
-    if (rdLinkSaved(href)) return false;
-    return rdWalled(new URL(href, location.href).host);
-  } catch (e) { return false; }
-}
-
 /** 스스로 문을 세워 두어 다른 화면 **안에서는** 결코 열리지 않는 곳.
  *
  *  재어 보고 알았다. 맨 위 창에서 열면 먼저 쿠키를 묻는 문이 서고, 틀
@@ -6884,25 +6925,41 @@ async function rdPasteNow(box, href) {
   rdLinkPaste(box, href);
 }
 
-/** 판 자리에 겹쳐 앉는 창을 하나 띄운다.
- *
- *  틀(iframe) 안에서는 그 사이트가 스스로 그리기를 멈춘다 — 남의 집 틀에는
- *  자기 쿠키가 안 들어오기 때문이다. 그래서 틀 대신 **첫째 집 창**을 판이
- *  있던 자리에 같은 크기로 띄운다. 이름을 같이 쓰므로 다음 링크는 같은
- *  창에서 이어 열린다. 휴대폰은 창을 따로 못 띄우니 새 탭이 된다. */
-function rdOpenWin(href) {
-  try {
-    const r = RD.el ? RD.el.getBoundingClientRect() : null;
-    const chrome = Math.max(0, (window.outerHeight || 0) - innerHeight);
-    const w = r ? Math.max(360, Math.round(r.width)) : 640;
-    const h = r ? Math.max(480, Math.round(r.height)) : 800;
-    const left = Math.round((window.screenX || 0) + (r ? r.left : 200));
-    const top = Math.round((window.screenY || 0) + chrome + (r ? r.top : 60));
-    const win = window.open(href, 'rdwin',
-      'popup=1,noopener=0,width=' + w + ',height=' + h + ',left=' + left + ',top=' + top);
-    if (win) { try { win.focus(); } catch (e) {} }
-    return win || null;
-  } catch (e) { return null; }
+/** 집(앱) 안인가 — 상자 칸에 진짜 글을 얹어 줄 수 있는 곳인가. */
+function rdHosted() { return typeof window.__tlOpen === 'function'; }
+
+let rdSlotN = 0;
+/** 상자의 칸을 비워 두고 집에게 「여기에 이 글을 얹어 주시오」 한다.
+ *  칸의 자리를 뒤쫓는 일도 집이 한다 — 이름표만 건네면 된다. */
+function rdSlotOpen(box, href) {
+  // 한 번에 한 칸만 얹을 수 있다. 앞서 열어 둔 칸은 쉬게 하고, 「여는 중」
+  // 이라고 적힌 채 남지 않도록 말을 바꿔 준다.
+  document.querySelectorAll('#rdrDoc .rlink[data-tlslot]').forEach(o => {
+    if (o === box) return;
+    rdSlotClose(o);
+    const s = o.querySelector('.ls');
+    if (s) s.textContent = L.s('「다시」를 누르면 여기에 펴집니다', 'Press Reload to open it here');
+  });
+  const lb = box.querySelector('.lb');
+  const id = 'ls' + (++rdSlotN);
+  // 칸을 넉넉히 — 330 px 는 글 한 자락 보기에 좁다. 판 높이의 삼분의 이쯤.
+  let h = 330;
+  try { h = Math.max(330, Math.round(RD.el.getBoundingClientRect().height * 0.62)); } catch (e) {}
+  lb.style.height = h + 'px';
+  const s = document.createElement('div');
+  s.className = 'ls';
+  s.setAttribute('data-tlslot', id);
+  s.textContent = L.s('여는 중…', 'Opening…');
+  lb.appendChild(s);
+  box.setAttribute('data-tlslot', id);
+  try { window.__tlOpen(String(href), id); } catch (e) {}
+}
+/** 상자를 접거나 지우면 얹어 둔 글도 걷는다 */
+function rdSlotClose(box) {
+  const id = box && box.getAttribute && box.getAttribute('data-tlslot');
+  if (!id) return;
+  box.removeAttribute('data-tlslot');
+  try { window.__tlClose && window.__tlClose(id); } catch (e) {}
 }
 
 /** 붙여 넣을 자리를 편다 */
@@ -6931,6 +6988,7 @@ function rdLinkPaste(box, href) {
 
 /** 상자 속을 채운다 — 담아 둔 것이 있으면 그것, 없으면 틀이나 갈랫길 */
 function rdLinkFill(box, href) {
+  rdSlotClose(box);
   const lb = box.querySelector('.lb');
   lb.innerHTML = '';
   let host = '';
@@ -6945,6 +7003,8 @@ function rdLinkFill(box, href) {
     return;
   }
   box.classList.remove('has');
+  // 집 안에서는 우회로가 필요 없다 — 그 칸에 진짜 글이 얹힌다
+  if (rdHosted()) { rdSlotOpen(box, href); return; }
   if (rdWalled(host)) { lb.appendChild(rdLinkAsk(href, true)); return; }
   const fr = document.createElement('iframe');
   fr.setAttribute('referrerpolicy', 'no-referrer');
@@ -6977,6 +7037,7 @@ function rdOpenLink(href, a) {
   const nx = blk && blk.nextElementSibling;
   if (nx && nx.classList && nx.classList.contains('rlink') && nx.getAttribute('data-href') === href) {
     nx.classList.toggle('fold');
+    if (nx.classList.contains('fold')) rdSlotClose(nx); else rdLinkFill(nx, href);
     rdFoldLabel(nx);
     return;
   }
@@ -7004,6 +7065,18 @@ function rdOpenLink(href, a) {
   box.querySelector('.lf [data-l="paste"]').textContent =
     rdLinkSaved(href) ? L.s('다시 붙여 넣기', 'Replace') : L.s('내용 붙여 넣기', 'Paste it here');
   box.querySelector('.lf [data-l="quote"]').textContent = L.s('인용', 'Quote');
+  // 집 안에서는 글이 그 칸에 그대로 뜨므로, 딴 데로 새는 문은 치운다.
+  // 「다시」만 남긴다 — 어쩌다 빈 종이가 되면 다시 부르는 문이다.
+  if (rdHosted()) {
+    box.querySelectorAll('a.lnew').forEach(x => x.remove());
+    const pb = box.querySelector('.lf [data-l="paste"]');
+    if (pb) pb.remove();
+    box.querySelector('.lf u').textContent = '';
+    const again = document.createElement('button');
+    again.setAttribute('data-l', 'again');
+    again.textContent = L.s('다시', 'Reload');
+    box.querySelector('.lh [data-l="fold"]').before(again);
+  }
   // 이 링크가 성구를 가리키면, 우리 자료에 걸린 사건 수를 바닥에 적어 둔다
   const vq = rdVerseOf(href, a);
   const vn = vq ? rdVerseHits(vq).length : 0;
@@ -7301,17 +7374,16 @@ function rdBind() {
     }
   }, 30));
   RD.doc.addEventListener('click', e => {
-    // 진짜 링크는 막지 않는다. 다만 컴퓨터에서는 새 탭 대신 **판 자리에
-    // 창을 하나 띄워** 그 안에서 열리게 한다 — 첫째 집(top-level) 창이라
-    // 그 사이트의 쿠키가 다 살아 있어 온전히 그려진다. 안 되면 그대로 탭.
-    const ln = e.target.closest('a.lnew');
-    if (ln) { if (rdOpenWin(ln.href)) e.preventDefault(); return; }
+    // 「새 창에서 열기」는 웹에만 남은 진짜 링크다 — 브라우저가 하던 대로.
+    // (집 안에서는 이 단추를 아예 달지 않는다.)
+    if (e.target.closest('a.lnew')) return;
     const lb = e.target.closest('.rlink [data-l]');
     if (lb) {
       const box = lb.closest('.rlink');
       const x = lb.dataset.l;
       const hf = box.getAttribute('data-href');
-      if (x === 'x') box.remove();
+      if (x === 'again') { rdLinkFill(box, hf); return; }
+      if (x === 'x') { rdSlotClose(box); box.remove(); }
       else if (x === 'paste') {
         box.classList.remove('fold'); rdFoldLabel(box);
         rdPasteNow(box, hf);
@@ -7320,7 +7392,11 @@ function rdBind() {
       }
       else if (x === 'quote') rdQuote(box, hf);
       else if (x === 'verse') rdVerseBox(lb.getAttribute('data-q'), null, box);
-      else { box.classList.toggle('fold'); rdFoldLabel(box); }
+      else {
+        box.classList.toggle('fold'); rdFoldLabel(box);
+        if (box.classList.contains('fold')) rdSlotClose(box);
+        else if (rdHosted() && !rdLinkSaved(hf)) rdLinkFill(box, hf);
+      }
       return;
     }
     const qb = e.target.closest('.rquote [data-q]');
@@ -7344,8 +7420,9 @@ function rdBind() {
       // 안에서 펼 길이 없는 링크라면 막지 않는다 — 눌렀으니 열려야 한다.
       // 상자는 그 밑에 그대로 남으니, 새 창에서 글을 복사해 돌아오면
       // 붙여 넣을 자리가 이미 기다리고 있다.
-      if (!rdOpensAway(href, a)) e.preventDefault();
-      else if (rdOpenWin(a.href)) e.preventDefault();
+      // 저절로는 어디로도 가지 않는다 — 팝업도, 새 탭도. 상자를 세우면
+      // 그 칸에 글이 들어찬다 (집 안에서는 진짜 글이, 웹에서는 틀이).
+      e.preventDefault();
       try { rdOpenLink(href, a); } catch (err) {}
       return;
     }
