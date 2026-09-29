@@ -386,7 +386,7 @@ async function loadAll() {
   // 예루살렘 안쪽 — 이름만 떠 있고 기록이 비어 있던 자리들.
   //
   // 성문·망대·샘·골짜기는 지도에 이름이 떠 있는데 눌러도 아무것도 없었다.
-  // 느헤미야 3장과 12장이 그 문들을 차례로 짚어 주고, 기혼과 엔-로겔과
+  // 느헤미야 3장과 12장이 그 문들을 차례로 짚어 주고, 기혼과 엔로겔과
   // 기드론과 힌놈과 모리아와 오벨도 저마다 제 기록을 가지고 있다.
   // (자료를 다시 뽑을 때까지 여기서 얹는다 — 원본에도 같이 넣어 두었다)
   EVENTS.push(
@@ -460,7 +460,7 @@ async function loadAll() {
       text: "이 문 위쪽 구간은 제사장들이 맡아 저마다 자기 집 앞을 고쳤다.",
       titleEn: "The priests repaired the wall each in front of his own house",
       textEn: "Above this gate the priests did the repair work, each one in front of his own house." },
-    { place: "검사 문", title: "금세공업자 말기야가 고친 문",
+    { place: "검열 문", title: "금세공업자 말기야가 고친 문",
       ref: "느헤미야 3:31", era: 7, year: -455, kind: 0, recall: 0,
       text: "금세공업 조합의 말기야가 성전 종들과 상인들의 집까지, 그리고 이 문 앞과 모퉁이의 옥상방까지 성벽을 고쳤다.",
       titleEn: "The gate Malchijah the goldsmith repaired",
@@ -485,12 +485,12 @@ async function loadAll() {
       text: "다윗은 솔로몬을 자기 노새에 태워 이 샘으로 내려가게 했다. 제사장 사독과 예언자 나단이 거기서 그에게 기름을 부었고, 나팔 소리와 백성의 함성이 땅을 울렸다.",
       titleEn: "Solomon was made king here",
       textEn: "David had Solomon ride his own mule down to this spring. There Zadok the priest and Nathan the prophet anointed him, and the sound of the horn and the shouting of the people shook the ground." },
-    { place: "엔-로겔", title: "아도니야가 여기서 잔치를 열다",
+    { place: "엔로겔", title: "아도니야가 여기서 잔치를 열다",
       ref: "열왕기상 1:9", era: 4, year: -1037, kind: 0, recall: 0,
       text: "아도니야는 이 샘 가까이 있는 소헬렛 돌 곁에서 양과 소와 살진 짐승으로 희생제를 열고, 자기 형제인 왕자들과 유다 사람인 왕의 신하들을 모두 불렀다.",
       titleEn: "Adonijah held his feast here",
       textEn: "Beside the stone of Zoheleth near this spring, Adonijah sacrificed sheep, cattle, and fattened animals, and invited all his brothers the king’s sons and the king’s servants of Judah." },
-    { place: "엔-로겔", title: "유다 지파의 북쪽 경계가 여기서 끝나다",
+    { place: "엔로겔", title: "유다 지파의 북쪽 경계가 여기서 끝나다",
       ref: "여호수아 15:7", era: 2, year: -1467, kind: 0, recall: 0,
       text: "유다 지파가 받은 땅의 북쪽 경계는 아둠밈 오르막길 앞을 지나 엔세메스의 물로 건너가서 이 샘에서 끝났다.",
       titleEn: "The north boundary of Judah ended here",
@@ -1211,7 +1211,7 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
         if (hyps < 0.5 && !wet) {
           float ca = coreAt(la, lo);
           // 메마름은 **문턱이 아니라 비탈**이라야 한다. 0.38 에서 뚝 끊었더니
-          // 네게브 북부(브엘-세바 ~200 mm)가 「낮은 땅」이라는 이유로 에스드모아
+          // 네게브 북부(브엘세바 ~200 mm)가 「낮은 땅」이라는 이유로 에스드모아
           // (~300 mm)보다 푸르게 나왔다 — 거꾸로다. 0.62 까지 완만히 끌면서
           // 낮은 쪽을 세게 눌러, 경계 지대가 강수량 차례대로 눕게 한다.
           float dry = pow(max(1.0 - smoothstep(0.0, 0.62, mo), 0.0), 0.75) * ca;
@@ -1220,8 +1220,8 @@ function makeTerrain(tile, segX, segZ, tex, clip, win) {
           // 딱 그 위에 앉아 누렇게 보였다. 0.36 부터 받으면 마루가 능선 동턱
           // 까지 푸르고, 거기서 광야로 넘어가는 자리가 짧고 또렷해진다.
           float grn = smoothstep(0.36, 0.60, mo) * ca;
-          // 남으로 갈수록 모래빛이 짙어진다. 브엘-세바 아래는 이미 사막의
-          // 문턱이고, 가데스-바네아쯤이면 온전한 사막이다. 다만 **물이 있는
+          // 남으로 갈수록 모래빛이 짙어진다. 브엘세바 아래는 이미 사막의
+          // 문턱이고, 가데스바네아쯤이면 온전한 사막이다. 다만 **물이 있는
           // 자리는 뺀다** — 그러지 않으면 상이집트를 가로지르는 나일의 초록
           // 실띠까지 함께 바래 버린다.
           float neg = (1.0 - smoothstep(30.10, 31.75, la))
@@ -1628,7 +1628,7 @@ const LABSLOT = new Map();
 // 미친 듯이 깜빡이던 까닭이다. 등급과 시대까지 붙여 서로 다른 것으로 센다.
 function labKey(s) { return s.ko + '\u0000' + s.rank + '\u0000' + (s.era || ''); }
 // 도피 도시 여섯 성 — 앱과 같이 붉은 세모를 붙인다 (여호수아 20장)
-const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못-길르앗', '골란']);
+const REFUGE = new Set(['게데스', '세겜', '헤브론', '베셀', '라못길르앗', '골란']);
 
 // 앱이 **특별히 크게** 쓰는 곳들. 이름만 보아도 어디쯤인지 잡히는 큰 도시라,
 // 성읍 수백 개 사이에서 한눈에 도드라져야 한다. (앱은 1.55 곱, 여기도 같게)
@@ -2735,7 +2735,7 @@ function openPlace(s) {
   const note = NOTES.get(s.ko);
   let html = '';
   if (note) {
-    html += '<div class="note"><em>' + escapeHTML(L.s('성서에 나오지 않는 곳', 'Not named in the Bible')) +
+    html += '<div class="note"><em>' + escapeHTML(L.s('성경에 나오지 않는 곳', 'Not named in the Bible')) +
       '</em>' + escapeHTML(L.cur === 'ko' ? note.ko : (note.en || note.ko)) + '</div>';
   }
   if (!eps.length && !note) {
@@ -2840,6 +2840,8 @@ function buildScanKeys() {
 /** 글에서 지명을 나온 차례대로 집어낸다 (앱의 TextScan 과 같은 규칙) */
 function scanText(t) {
   if (!t || t.length < 4) return [];
+  // 옛 표기의 붙임표(브엘-세바)는 지우고 본다 — 이름표는 이제 붙여 쓴다
+  t = t.replace(/([가-힣])-(?=[가-힣])/g, '$1');
   buildScanKeys();
   const lower = t.toLowerCase();
   const taken = new Array(t.length).fill(false);
